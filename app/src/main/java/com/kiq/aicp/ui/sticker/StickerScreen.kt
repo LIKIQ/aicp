@@ -207,10 +207,7 @@ fun StickerScreen(
 			// 机制说明摆在列表里而不是顶栏下方固定住：它是"看一次就懂"的东西，
 			// 跟着内容滚走正好，钉在屏幕上只会一直占掉一块地方
 			item(key = "how-it-works") {
-				MechanismNote(
-					unclassifiedTotal = state.unclassifiedTotal,
-					visionReady = state.visionReady,
-				)
+				MechanismNote(state)
 			}
 
 			state.groups.forEachIndexed { index, group ->
@@ -546,11 +543,16 @@ private fun EmotionChip(
  * 只讲三件事：模型按情绪挑图、组名写成情绪词最省事、剩下的等后台识别。
  * 再多就没人读了，具体的坑留给各处 hint 在用户真的要改的时候说。
  *
- * 没配视觉模型时那句"等后台"要换成两条出路（配模型 / 把组名改成情绪词），
- * 否则用户只会看着"待分类"发呆 —— 识图那边判 notConfigured 是直接收工的，不会自己好。
+ * 另外两句是"这页说的事现在到底生不生效"，都用醒目色：
+ * 没配视觉模型时识图跑不起来（判 notConfigured 就收工，不会自己好），
+ * 总开关关掉或"告诉模型几个"调成 0 时，模型根本拿不到情绪清单。
+ * 不写出来的话，用户只会对着一页"待分类"和一个不发表情的 AI 各自纳闷。
+ *
+ * 收整个 state 而不是逐个字段：这几句判断迟早还要加，签名跟着改一次不如一次收全，
+ * 跟设置页那些分区（AppearanceSection 等）的写法也是一路的。
  */
 @Composable
-private fun MechanismNote(unclassifiedTotal: Int, visionReady: Boolean) {
+private fun MechanismNote(state: StickerUiState) {
 	SectionCard(
 		title = "AI 是按情绪挑表情的",
 		subtitle = "它看不到单张图的标记，只拿到一份情绪清单：写下 [开心]，应用就从开心的图里随机挑一张换上去。",
@@ -561,23 +563,44 @@ private fun MechanismNote(unclassifiedTotal: Int, visionReady: Boolean) {
 			style = MaterialTheme.typography.bodySmall,
 			color = MaterialTheme.colorScheme.outline,
 		)
-		if (unclassifiedTotal > 0) {
+
+		if (state.unclassifiedTotal > 0) {
 			Text(
-				if (visionReady) {
-					"现在还有 $unclassifiedTotal 张在排队识别，识完会自己显示出来。"
+				if (state.visionReady) {
+					"现在还有 ${state.unclassifiedTotal} 张在排队识别，识完会自己显示出来。"
 				} else {
-					"有 $unclassifiedTotal 张等着分类，但设置里还没有能看图的模型，识图跑不起来 —— " +
+					"有 ${state.unclassifiedTotal} 张等着分类，但设置里还没有能看图的模型，识图跑不起来 —— " +
 						"去配一个，或者把这些图所在的分组名直接改成情绪词。"
 				},
 				style = MaterialTheme.typography.bodySmall,
-				color = if (visionReady) {
+				color = if (state.visionReady) {
 					MaterialTheme.colorScheme.primary
 				} else {
 					MaterialTheme.colorScheme.error
 				},
 			)
 		}
+
+		promptOffNote(state)?.let {
+			Text(
+				it,
+				style = MaterialTheme.typography.bodySmall,
+				color = MaterialTheme.colorScheme.error,
+			)
+		}
 	}
+}
+
+/** 设置项把整套机制掐掉的两种情况。都没掐就返回 null，这块提示整段不画 */
+private fun promptOffNote(state: StickerUiState): String? = when {
+	!state.stickersEnabled ->
+		"表情包总开关在设置里是关着的，AI 现在不会主动发表情 —— 上面这套挑图规则要打开它才生效。" +
+			"你自己在输入框手打 [标记] 不受影响。"
+
+	state.promptLimit == 0 ->
+		"设置里「告诉模型多少个表情」调成了 0，情绪清单是空的，AI 也就无从挑起。"
+
+	else -> null
 }
 
 @Composable
@@ -899,6 +922,9 @@ private fun EmotionPickerDialog(
 /**
  * 选分组：导入目标和"移到别的组"都用它。
  * 分组多了列表会顶出屏幕，所以套一层 verticalScroll —— AlertDialog 的内容区不自带滚动。
+ *
+ * 每行带上情绪归属不是为了好看：把一张图移进名叫「开心」的组，等于一步给它定了情绪，
+ * 这是比逐张点情绪更快的批量手段。看不到归属的话，用户根本想不到还能这么用。
  */
 @Composable
 private fun PackChooserDialog(
@@ -924,7 +950,7 @@ private fun PackChooserDialog(
 							if (isCurrent) {
 								"${group.pack.name}（当前）"
 							} else {
-								"${group.pack.name}（${group.stickers.size} 张）"
+								"${group.pack.name}（${group.stickers.size} 张${packChooserSuffix(group)}）"
 							},
 						)
 					}
@@ -935,4 +961,11 @@ private fun PackChooserDialog(
 			TextButton(onClick = onDismiss) { Text("取消") }
 		},
 	)
+}
+
+/** 情绪组标出情绪，非情绪组标出还有几张没分类；都没有就只留张数 */
+private fun packChooserSuffix(group: StickerPackGroup): String = when {
+	group.packEmotion != null -> " · 情绪 ${group.packEmotion}"
+	group.unclassifiedCount > 0 -> " · ${group.unclassifiedCount} 张待分类"
+	else -> ""
 }

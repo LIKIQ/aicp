@@ -296,11 +296,24 @@ class StickerViewModel(
 		}
 	}
 
+	/**
+	 * 换组。移进情绪组之后这张图就归组名管了，提示里得说出来 ——
+	 * 用户看到的往前一步是"移动"，实际发生的还有"情绪变了"，只说前半句他会以为图白移了。
+	 */
 	fun moveSticker(sticker: StickerEntity, pack: StickerPackEntity) {
 		if (sticker.packId == pack.id) return
 		viewModelScope.launch {
 			runCatching { stickerRepository.moveToPack(sticker.id, pack.id) }
-				.onSuccess { notice("[${sticker.label}] 移到「${pack.name}」了") }
+				.onSuccess {
+					val emotion = StickerEmotion.emotionOf(pack.name)
+					notice(
+						if (emotion != null) {
+							"[${sticker.label}] 移到「${pack.name}」了，现在按情绪「$emotion」发"
+						} else {
+							"[${sticker.label}] 移到「${pack.name}」了"
+						},
+					)
+				}
 				.onFailure { fail(it, "没能移动") }
 		}
 	}
