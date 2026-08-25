@@ -26,5 +26,13 @@ data class StickerPackEntity(
 
 	val sortOrder: Int = 0,
 
+	/**
+	 * 这个分组是不是应用自带的预设。
+	 *
+	 * 表情面板要把"内置预设"和"我自己导的"分开展示，而这件事没法靠名字猜 ——
+	 * 用户完全可以自己建一个叫「开心」的分组。所以在建组时就记下来源。
+	 */
+	val builtIn: Boolean = false,
+
 	val createdAt: Long,
 )

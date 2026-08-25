@@ -5,6 +5,10 @@
 // 放主线程会实打实拖慢冷启动，而首页拿到数据是靠 Flow 推的，晚几十毫秒无感。
 //
 // 备份恢复反过来 —— 必须同步、必须在容器之前，理由写在 onCreate 里那段注释。
+//
+// 这里还订阅着两条设置流：主动搭话的后台排程、保活服务的启停。两者都是进程级的东西，
+// 挂在某个页面的 ViewModel 上就会漏掉"用户从没打开过那个页面"的启动，
+// 各自的取舍写在对应的 observe 方法上。
 
 package com.kiq.aicp
 
@@ -64,6 +68,7 @@ class AicpApplication : Application() {
 		}
 
 		observeProactiveSchedule()
+		observeKeepAlive()
 
 		// 补跑一次表情识图：上次可能导入完就被杀进程了，或者当时没网。
 		// 没有待识别的图时 Worker 查一次库就退出，代价可以忽略，所以无条件排
@@ -146,6 +151,33 @@ class AicpApplication : Application() {
 							ProactiveWorker.cancel(this@AicpApplication)
 						}
 					}.onFailure { Log.e(TAG, "更新主动搭话排程失败", it) }
+				}
+		}
+	}
+
+	/**
+	 * 保活前台服务跟着设置走。
+	 *
+	 * 订阅位置跟排程同理：设置页可能压根没被打开过，而进程被系统清掉之后重开一次，
+	 * 也得有人把服务拉回来 —— START_STICKY 管的是"服务被单独杀掉"，
+	 * 整个进程重建时还是要靠这条订阅。顺带解决了"开关一动服务就得跟着动"：
+	 * 写盘之后流立刻推新值，不用等下次冷启动，也不用让设置页再插一手去管服务。
+	 *
+	 * 判据是"主动搭话开着 且 保活开着"：主动搭话关着的时候保活什么也保不了，
+	 * 留着的只是一条白占地方的常驻通知。
+	 *
+	 * 这次启动可能失败且无法当场补救 —— Android 12 起禁止从后台启动前台服务，
+	 * 而这条订阅所在的冷启动完全可能是 WorkManager 在后台唤起的。失败已经在
+	 * KeepAliveService 里咽掉并记了日志，用户下次打开应用时会再走一遍这里。
+	 */
+	private fun observeKeepAlive() {
+		applicationScope.launch {
+			container.settingsStore.settings
+				.map { it.proactiveEnabled && it.keepAliveEnabled }
+				.distinctUntilChanged()
+				.collect { shouldKeepAlive ->
+					runCatching { container.applyKeepAlive(shouldKeepAlive) }
+						.onFailure { Log.e(TAG, "切换保活服务失败", it) }
 				}
 		}
 	}

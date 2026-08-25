@@ -102,6 +102,15 @@ data class AicpSettings(
 	val quietHoursEnd: Int = 8,
 
 	/**
+	 * 保持后台运行：挂一个前台服务把进程留住，让 ProactiveWorker 的周期任务有机会准时醒。
+	 *
+	 * 默认关，而且不打算改 —— 它的代价是通知栏多一条撤不掉的常驻通知，
+	 * 这种"用户一眼就能看见的占用"必须由他自己点开，不能靠默认值替他决定。
+	 * 只有主动搭话本身开着的时候它才有意义，判据写在 AicpApplication 那条订阅里。
+	 */
+	val keepAliveEnabled: Boolean = false,
+
+	/**
 	 * 用户自己写的记忆规则 —— wiki 三层结构里的第三层（schema）。
 	 *
 	 * Karpathy 那份 llm-wiki 里 schema 是"你和 LLM 共同演进的配置文件"，
@@ -161,7 +170,7 @@ data class AicpSettings(
 			"humanize=$humanizeEnabled/${humanizeMaxSegments}seg/${humanizeMsPerChar}ms, " +
 			"proactive=$proactiveEnabled/push=$proactivePushEnabled/${proactiveIdleMinutes}min/" +
 			"${proactiveDailyLimit}per-day, quiet=$quietHoursStart-$quietHoursEnd, " +
-			"dynamicColor=$dynamicColor)"
+			"keepAlive=$keepAliveEnabled, dynamicColor=$dynamicColor)"
 
 	companion object {
 		/** 给日志和 UI 用的脱敏展示 */

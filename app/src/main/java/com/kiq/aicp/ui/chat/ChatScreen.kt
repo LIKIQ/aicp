@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -95,7 +97,7 @@ fun ChatScreen(
 	)
 	val state by viewModel.uiState.collectAsStateWithLifecycle()
 	val allPersonas by viewModel.allPersonas.collectAsStateWithLifecycle()
-	val stickers by viewModel.stickers.collectAsStateWithLifecycle()
+	val stickerPanel by viewModel.stickerPanel.collectAsStateWithLifecycle()
 
 	val listState = rememberLazyListState()
 	val snackbar = remember { SnackbarHostState() }
@@ -261,7 +263,24 @@ fun ChatScreen(
 			)
 		},
 		bottomBar = {
-			Column {
+			/*
+			 * 这两个 padding 少一个都会让输入栏变得不能用：
+			 *
+			 * imePadding —— 项目开了 edge-to-edge，而 Android 11 起
+			 * decorFitsSystemWindows=false 之后 manifest 里那个 adjustResize 就不再生效，
+			 * 键盘弹出来会直接盖住输入栏，用户看不见自己正在打的字。
+			 *
+			 * navigationBarsPadding —— 键盘收起时 ime inset 归零，
+			 * 带虚拟导航栏的机器上输入栏会被导航栏压住半截。
+			 *
+			 * 两个链在一起就是"取较大的那个"：键盘弹出时 imePadding 把 inset 吃完，
+			 * navigationBarsPadding 自然变 0；收起时反过来。
+			 */
+			Column(
+				modifier = Modifier
+					.imePadding()
+					.navigationBarsPadding(),
+			) {
 				PendingAttachmentStrip(
 					attachments = state.attachments,
 					resolveAttachment = viewModel::resolveAttachment,
@@ -285,7 +304,8 @@ fun ChatScreen(
 				)
 				if (stickerPanelOpen) {
 					StickerPanel(
-						stickers = stickers,
+						builtIn = stickerPanel.builtIn,
+						custom = stickerPanel.custom,
 						resolveFile = viewModel::resolveAttachment,
 						onPick = viewModel::appendStickerMarker,
 					)

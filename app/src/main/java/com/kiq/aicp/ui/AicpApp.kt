@@ -55,6 +55,16 @@ private object Routes {
 	const val MEMORY = "memory"
 	const val STICKER = "sticker"
 
+	/**
+	 * 压栈进来的设置页，跟底部 tab 里那个是两条不同的 route。
+	 *
+	 * 聊天页那句"还没配置接口"点过去时用这个：tab 的 route 一旦被 navigate 上去，
+	 * 底部 tab 栏会跟着冒出来（onTab 判定为真），看着像是切了 tab，
+	 * 可返回栈里还压着聊天页，此后点任何 tab 都会触发 popUpTo + restoreState，
+	 * 行为对用户完全不可预测。独立 route 不进 tab 判定，返回就是干净的一次 pop。
+	 */
+	const val SETTINGS_MODAL = "settings/modal"
+
 	fun chat(conversationId: Long) = "chat/$conversationId"
 	fun personaEdit(personaId: Long) = "persona/edit/$personaId"
 }
@@ -124,6 +134,16 @@ fun AicpApp() {
 				)
 			}
 
+			// 从聊天页压栈进来的那一份。同一个 Composable，只是多给一个返回箭头，
+			// 并且不算 tab（底部栏不显示），返回就回到刚才那个会话
+			composable(Routes.SETTINGS_MODAL) {
+				SettingsScreen(
+					onOpenMemory = { navController.navigate(Routes.MEMORY) },
+					onOpenStickers = { navController.navigate(Routes.STICKER) },
+					onBack = { navController.popBackStack() },
+				)
+			}
+
 			composable(Routes.MEMORY) {
 				MemoryScreen(onBack = { navController.popBackStack() })
 			}
@@ -140,7 +160,7 @@ fun AicpApp() {
 					ChatScreen(
 						conversationId = conversationId,
 						onBack = { navController.popBackStack() },
-						onOpenSettings = { navController.navigate(TopTab.Settings.route) },
+						onOpenSettings = { navController.navigate(Routes.SETTINGS_MODAL) },
 						// 气泡头像点开的资料卡里那个「编辑」按钮，直接进这个性格的编辑页
 						onEditPersona = { personaId ->
 							navController.navigate(Routes.personaEdit(personaId))

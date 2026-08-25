@@ -15,9 +15,13 @@
 package com.kiq.aicp.ui.settings
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -42,12 +46,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -62,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -75,6 +83,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kiq.aicp.BuildConfig
+import com.kiq.aicp.R
 import com.kiq.aicp.data.backup.BackupManager
 import com.kiq.aicp.domain.config.ConfigCodec
 import com.kiq.aicp.ui.common.UpdateDialog
@@ -99,6 +108,11 @@ private val CodeBoxMaxHeight = 200.dp
 fun SettingsScreen(
 	onOpenMemory: () -> Unit,
 	onOpenStickers: () -> Unit,
+	/**
+	 * 非空表示这次是从别的页面（比如聊天页那句"还没配置接口"）压栈进来的，
+	 * 标题栏要给一个返回箭头。tab 里进来时传 null —— tab 页没有"上一页"可回。
+	 */
+	onBack: (() -> Unit)? = null,
 	viewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory),
 ) {
 	val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -121,7 +135,21 @@ fun SettingsScreen(
 	}
 
 	Scaffold(
-		topBar = { TopAppBar(title = { Text("设置") }) },
+		topBar = {
+			TopAppBar(
+				title = { Text("设置") },
+				navigationIcon = {
+					onBack?.let { back ->
+						IconButton(onClick = back) {
+							Icon(
+								painter = painterResource(R.drawable.ic_back),
+								contentDescription = "返回",
+							)
+						}
+					}
+				},
+			)
+		},
 		snackbarHost = { SnackbarHost(snackbarHostState) },
 	) { innerPadding ->
 		LazyColumn(
@@ -492,6 +520,10 @@ private fun HumanizeSection(state: SettingsUiState, viewModel: SettingsViewModel
  * 那样他会以为配好了，然后抱怨"开了推送但一条都没收到"。拒绝就写回 false 并明说原因。
  *
  * 排程本身不在这里碰，AicpApplication 订阅着设置自己会去注册/取消 WorkManager。
+ *
+ * 保活那两行（前台服务开关 + 电池优化引导）拆到 KeepAliveRows 里，
+ * 但仍然摆在这张卡片内：它不是一项独立功能，是"让主动搭话真的能按时触发"的手段，
+ * 单独立一个分区反而会让人以为开了它就能收到消息。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -651,7 +683,163 @@ private fun ProactiveSection(state: SettingsUiState, viewModel: SettingsViewMode
 				)
 			}
 		}
+
+		// 放在 if 外面：主动搭话关着的时候这一行也要露出来，只是变成禁用态。
+		// 藏起来的话，"到点了却不搭话"的用户永远找不到这个能救他的开关
+		KeepAliveRows(state, viewModel)
 	}
+}
+
+/**
+ * 保活：前台服务开关 + 电池优化引导。
+ *
+ * 这两样必须一起出现。前台服务只能把进程放进"系统眼里不该回收"的那一档，
+ * 挡不住部分 ROM 在内存紧张时的清理；电池优化白名单管的是省电策略那一路。
+ * 只做一半，用户还是会撞上"开了保活照样不搭话"，然后得出"这功能是假的"的结论。
+ *
+ * 开关自己画一行而不复用 SwitchRow：这一项在主动搭话关着时必须是禁用态，
+ * 而 SwitchRow 没有 enabled 参数 —— 能点开却什么都不发生，比压根不给点更让人困惑。
+ */
+@Composable
+private fun KeepAliveRows(state: SettingsUiState, viewModel: SettingsViewModel) {
+	val s = state.settings
+	val context = LocalContext.current
+
+	// 电池优化的当前状态。只在页面重新可见时查一次：用户是跑到系统设置里改这个的，
+	// 那个页面既不回调也不返回结果，resume 是唯一能保证"他改完回来这里就跟着变"的时机
+	var ignoringBattery by remember { mutableStateOf(false) }
+
+	// 两个系统页面都打不开的机器。按钮按下去毫无反应最容易被当成 bug，得留一句话交代
+	var noSystemPage by remember { mutableStateOf(false) }
+
+	LifecycleResumeEffect(Unit) {
+		ignoringBattery = isIgnoringBatteryOptimizations(context)
+		onPauseOrDispose { }
+	}
+
+	Row(
+		modifier = Modifier.fillMaxWidth(),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceMd),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Column(
+			modifier = Modifier.weight(1f),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
+		) {
+			Text(
+				"保持后台运行",
+				style = MaterialTheme.typography.bodyLarge,
+				// 禁用态连标题一起变灰，不然只有开关是灰的，看着像开关坏了
+				color = if (s.proactiveEnabled) {
+					MaterialTheme.colorScheme.onSurface
+				} else {
+					MaterialTheme.colorScheme.outline
+				},
+			)
+			Text(
+				if (s.proactiveEnabled) {
+					"挂一条常驻通知把 AICP 留在后台，让到点的后台检查更可能真的跑起来"
+				} else {
+					"先打开上面的主动搭话 —— 它关着的时候，保活没有任何东西要保"
+				},
+				style = MaterialTheme.typography.bodySmall,
+				color = MaterialTheme.colorScheme.outline,
+			)
+		}
+		Switch(
+			checked = s.keepAliveEnabled,
+			onCheckedChange = { viewModel.setKeepAlive(it) },
+			enabled = s.proactiveEnabled,
+		)
+	}
+
+	// 只在真的开着的时候往下展开：保活关着时讲电池优化，等于在解释一个用户还没选择的东西
+	if (s.proactiveEnabled && s.keepAliveEnabled) {
+		Text(
+			"代价先说清楚：通知栏会一直挂一条 AICP 的通知，划不掉也撤不掉 —— " +
+				"那是系统对前台服务的强制要求，不是这里漏了个关闭按钮。" +
+				"换来的是进程不容易被回收，到点的检查更可能真的执行。",
+			style = MaterialTheme.typography.bodySmall,
+			color = MaterialTheme.colorScheme.error,
+		)
+
+		Text(
+			if (ignoringBattery) {
+				"电池优化：已经放行，系统不会再为了省电把 AICP 从后台清掉"
+			} else {
+				"电池优化：还管着 AICP。省电策略照样会在内存紧张时把它清掉，这一路前台服务挡不住"
+			},
+			style = MaterialTheme.typography.bodySmall,
+			color = if (ignoringBattery) {
+				MaterialTheme.colorScheme.outline
+			} else {
+				MaterialTheme.colorScheme.error
+			},
+		)
+
+		if (!ignoringBattery) {
+			OutlinedButton(onClick = { noSystemPage = !openBatteryWhitelistRequest(context) }) {
+				Text("去放行电池优化")
+			}
+			Text(
+				"按下去会弹一个系统对话框问你要不要允许后台运行。这个请求只在你按这里的时候发 —— " +
+					"应用一启动就自己弹系统弹窗，那是流氓软件的做法。",
+				style = MaterialTheme.typography.bodySmall,
+				color = MaterialTheme.colorScheme.outline,
+			)
+		}
+
+		if (noSystemPage) {
+			Text(
+				"你这台设备把这两个系统页面都藏了起来，只能手动找：系统设置 - 应用管理 - AICP - " +
+					"耗电管理（有的 ROM 叫省电策略或自启动管理），把它设成不受限制。",
+				style = MaterialTheme.typography.bodySmall,
+				color = MaterialTheme.colorScheme.error,
+			)
+		}
+	}
+}
+
+/**
+ * 当前有没有被放进电池优化白名单。
+ *
+ * 取不到 PowerManager 时按"没放行"算：这个判断只用来决定要不要显示引导，
+ * 宁可多显示一次引导，也不能在真被限制着的时候告诉用户"已经放行了"。
+ */
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+	val manager = context.getSystemService(PowerManager::class.java) ?: return false
+	return manager.isIgnoringBatteryOptimizations(context.packageName)
+}
+
+/**
+ * 拉起电池优化白名单请求，返回有没有成功打开某个页面。
+ *
+ * 两级兜底：ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 在不少国产 ROM 上压根不存在，
+ * startActivity 会抛 ActivityNotFoundException；有的 ROM 存在但不接三方调用，抛 SecurityException。
+ * 抛了就退回应用详情页 —— 那一页几乎每台机器都有，用户从那儿点进耗电管理也能到目的地。
+ * 连详情页都打不开时返回 false，由调用方把话说明白，而不是让按钮按下去毫无反应。
+ *
+ * BatteryLife 那条 lint 警告提醒的是"Play 对这个权限有政策限制"，这里明知故用：
+ * 保活就是这个功能的诉求本身，而且请求由用户在设置页主动按，不是启动时偷偷弹的。
+ */
+@SuppressLint("BatteryLife")
+private fun openBatteryWhitelistRequest(context: Context): Boolean {
+	val self = "package:${context.packageName}".toUri()
+	// NEW_TASK 是给"LocalContext 拿到的不是 Activity"那种情况兜底的，从 Activity 起也不受影响
+	val opened = runCatching {
+		context.startActivity(
+			Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, self)
+				.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+		)
+	}.isSuccess
+	if (opened) return true
+
+	return runCatching {
+		context.startActivity(
+			Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, self)
+				.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+		)
+	}.isSuccess
 }
 
 /**

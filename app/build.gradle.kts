@@ -36,8 +36,10 @@ android {
 		// 5 = P17（配置码导入导出、表情按情绪分类与后台识图、GitHub 版本检测、release 签名）
 		// 6 = 0.5.1，修构建配置：关掉资源压缩，它把 NotificationCompat 要用的通知资源删了
 		// 7 = 0.5.2，内置 32 个预设表情（系统 emoji 渲染成 PNG，按情绪分组）
-		versionCode = 7
-		versionName = "0.5.2"
+		// 8 = 0.5.3，修键盘/导航栏遮挡输入栏、修跳设置后返回错位、表情面板分内置与自定义、
+		//     主动搭话可保持后台运行
+		versionCode = 8
+		versionName = "0.5.3"
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 		// 精确到天而不是毫秒：带毫秒会让每次构建的 BuildConfig 都变，

@@ -50,7 +50,7 @@ import com.kiq.aicp.data.db.entity.StickerPackEntity
  * 标着 v5 的备份里装着 v6 的库文件，恢复时的版本校验形同虚设。
  * 以后升版本只改这一个数。
  */
-const val AICP_DB_VERSION = 7
+const val AICP_DB_VERSION = 8
 
 @Database(
 	entities = [

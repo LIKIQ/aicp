@@ -260,6 +260,29 @@ object AicpMigrations {
 		}
 	}
 
+	/**
+	 * v8：表情分组多一列 builtIn，把"应用自带的预设"和"用户自己导的"分开。
+	 *
+	 * 已有数据的回填只能靠名字猜：0.5.2 那版预设建的分组名正好是情绪词表里那 20 个，
+	 * 所以按名字命中就标成内置。代价是用户自己建过同名分组的话会被误标 ——
+	 * 后果只是它显示在"内置"那一栏里，不影响发送和识图，可以接受。
+	 * 从这一版起新建的分组都在建组时就记准来源，不再需要猜。
+	 */
+	val MIGRATION_7_8 = object : Migration(7, 8) {
+		override fun migrate(db: SupportSQLiteDatabase) {
+			db.execSQL(
+				"ALTER TABLE `sticker_packs` ADD COLUMN `builtIn` INTEGER NOT NULL DEFAULT 0",
+			)
+			val presetNames = listOf(
+				"开心", "大笑", "害羞", "得意", "撒娇",
+				"无语", "尴尬", "疑惑", "思考", "惊讶",
+				"伤心", "哭", "委屈", "生气", "无奈",
+				"困", "累", "可爱", "点赞", "比心",
+			).joinToString(",") { "'$it'" }
+			db.execSQL("UPDATE `sticker_packs` SET `builtIn` = 1 WHERE `name` IN ($presetNames)")
+		}
+	}
+
 	val ALL: Array<Migration> = arrayOf(
 		MIGRATION_1_2,
 		MIGRATION_2_3,
@@ -267,5 +290,6 @@ object AicpMigrations {
 		MIGRATION_4_5,
 		MIGRATION_5_6,
 		MIGRATION_6_7,
+		MIGRATION_7_8,
 	)
 }

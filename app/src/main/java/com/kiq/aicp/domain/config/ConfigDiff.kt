@@ -53,6 +53,7 @@ object ConfigDiff {
 		Field("每天最多搭话") { "${it.proactiveDailyLimit} 次" },
 		Field("免打扰起点") { "${it.quietHoursStart} 点" },
 		Field("免打扰终点") { "${it.quietHoursEnd} 点" },
+		Field("保持后台运行") { onOff(it.keepAliveEnabled) },
 		Field("记忆规则") { blankAs(it.memorySchema.take(20), "没写") },
 		Field("跟随系统取色") { onOff(it.dynamicColor) },
 	)

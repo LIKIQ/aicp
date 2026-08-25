@@ -55,6 +55,7 @@ data class ConfigPayload(
 	val proactiveDailyLimit: Int = 3,
 	val quietHoursStart: Int = 23,
 	val quietHoursEnd: Int = 8,
+	val keepAliveEnabled: Boolean = false,
 	val memorySchema: String = "",
 	val dynamicColor: Boolean = true,
 )
@@ -183,6 +184,7 @@ object ConfigCodec {
 		proactiveDailyLimit = proactiveDailyLimit,
 		quietHoursStart = quietHoursStart,
 		quietHoursEnd = quietHoursEnd,
+		keepAliveEnabled = keepAliveEnabled,
 		memorySchema = memorySchema,
 		dynamicColor = dynamicColor,
 	)
@@ -218,6 +220,7 @@ object ConfigCodec {
 		proactiveDailyLimit = proactiveDailyLimit.coerceIn(0, 50),
 		quietHoursStart = quietHoursStart.coerceIn(0, 23),
 		quietHoursEnd = quietHoursEnd.coerceIn(0, 23),
+		keepAliveEnabled = keepAliveEnabled,
 		memorySchema = memorySchema.take(600),
 		dynamicColor = dynamicColor,
 	)

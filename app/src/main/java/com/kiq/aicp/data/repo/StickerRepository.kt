@@ -48,11 +48,16 @@ class StickerRepository(
 	// ---------------- 分组 ----------------
 
 	/** 已存在就直接返回原有 id。导入时"自动建默认组"需要幂等 */
-	suspend fun ensurePack(name: String): Long {
+	suspend fun ensurePack(name: String, builtIn: Boolean = false): Long {
 		val clean = name.trim().take(MAX_PACK_NAME).ifEmpty { DEFAULT_PACK }
 		dao.packByName(clean)?.let { return it.id }
 		return dao.insertPack(
-			StickerPackEntity(name = clean, sortOrder = dao.packCount(), createdAt = clock()),
+			StickerPackEntity(
+				name = clean,
+				sortOrder = dao.packCount(),
+				builtIn = builtIn,
+				createdAt = clock(),
+			),
 		)
 	}
 

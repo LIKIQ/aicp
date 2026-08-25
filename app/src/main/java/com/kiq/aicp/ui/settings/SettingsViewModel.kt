@@ -437,6 +437,17 @@ class SettingsViewModel(
 		)
 	}
 
+	/**
+	 * 保持后台运行。
+	 *
+	 * 这里只写设置，不碰服务 —— 跟 updateProactiveTuning 同一个道理：
+	 * AicpApplication 订阅着 settingsStore，写进去它自己会去启停 KeepAliveService。
+	 * 设置页再直接 start/stop 一次就成了两个地方管同一个服务，而那两处判据一旦哪天走岔
+	 * （比如这边忘了判主动搭话的总闸），就会出现"关了主动搭话通知栏还挂着"这种查不动的状态。
+	 * 写盘到服务启停之间只隔一次流推送，用户观感上仍然是"点完就生效"。
+	 */
+	fun setKeepAlive(enabled: Boolean) = launchStore { setKeepAliveEnabled(enabled) }
+
 	fun resetTuning() = launchStore { resetTuning() }
 
 	// ---------------- 备份与恢复 ----------------

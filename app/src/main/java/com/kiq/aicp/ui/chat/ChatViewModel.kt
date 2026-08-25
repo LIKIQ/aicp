@@ -111,6 +111,12 @@ data class GroupProfileDraft(
 	val saving: Boolean = false,
 )
 
+/** 表情面板按来源分好的两栏。空实例用于流的初值 */
+data class StickerPanelData(
+	val builtIn: List<StickerEntity> = emptyList(),
+	val custom: List<StickerEntity> = emptyList(),
+)
+
 data class ChatUiState(
 	val conversation: ConversationEntity? = null,
 	val participants: List<PersonaEntity> = emptyList(),
@@ -265,9 +271,23 @@ class ChatViewModel(
 		initialValue = ChatUiState(),
 	)
 
-	/** 表情面板的数据源。跟 stickerIndex 分开是因为面板要按分组和导入顺序展示，不只要路径 */
-	val stickers: StateFlow<List<StickerEntity>> = stickerRepository.observeAll()
-		.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+	/**
+	 * 表情面板的数据源，按来源分成两栏。
+	 *
+	 * 分栏在这里算而不是丢给 Composable：判据是分组的 builtIn 标记，
+	 * 要把 packs 和 stickers 两条流对起来，那是数据的事不是渲染的事。
+	 * 跟 stickerIndex 分开是因为面板要按分组和导入顺序展示，不只要路径。
+	 */
+	val stickerPanel: StateFlow<StickerPanelData> = combine(
+		stickerRepository.observeAll(),
+		stickerRepository.observePacks(),
+	) { stickers, packs ->
+		val builtInPackIds = packs.filter { it.builtIn }.map { it.id }.toSet()
+		StickerPanelData(
+			builtIn = stickers.filter { it.packId in builtInPackIds },
+			custom = stickers.filterNot { it.packId in builtInPackIds },
+		)
+	}.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StickerPanelData())
 
 	fun onInputChange(value: String) = transient.update { it.copy(input = value, error = null) }
 

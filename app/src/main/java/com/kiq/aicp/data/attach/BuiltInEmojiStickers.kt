@@ -62,10 +62,13 @@ class BuiltInEmojiStickers(
 				return@forEach
 			}
 
-			val packId = runCatching { stickerRepository.ensurePack(emotion) }.getOrElse { e ->
-				Log.w(TAG, "分组「$emotion」建不出来", e)
-				return@forEach
-			}
+			// 建组时就标成内置：表情面板要把预设和用户自己导的分开展示，
+			// 事后靠名字猜会把用户自建的同名分组也算进来
+			val packId = runCatching { stickerRepository.ensurePack(emotion, builtIn = true) }
+				.getOrElse { e ->
+					Log.w(TAG, "分组「$emotion」建不出来", e)
+					return@forEach
+				}
 
 			usable.forEachIndexed { index, emoji ->
 				runCatching { importOne(packId, emotion, index + 1, emoji, paint) }

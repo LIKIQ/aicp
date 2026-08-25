@@ -6,6 +6,7 @@ AICP 应用清单
 - 申请网络权限（调用云端 OpenAI 兼容接口）
 - 挂 network_security_config
 - 注册 AicpApplication（持有全局 AppContainer）与唯一入口 MainActivity
+- 注册 KeepAliveService（主动搭话的保活前台服务）并声明它的 specialUse 用途
 安全取舍：
 - allowBackup=false：聊天记忆与加密后的 API Key 不进系统云备份，避免数据出设备。
   需要备份时走应用内导出功能，不依赖 Google Backup。
@@ -18,6 +19,20 @@ AICP 应用清单
 	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 	<!-- 后台主动搭话推送；Android 13+ 运行时还要在设置里开 POST_NOTIFICATIONS，这里先声明 -->
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+	<!--
+	保活前台服务用的两个权限。SPECIAL_USE 是 Android 14+ 的类型权限，缺了它
+	startForeground 会抛 SecurityException；用途说明在下面 service 的 <property> 里。
+	-->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+	<!--
+	引导用户把本应用加进电池优化白名单（前台服务挡不住部分 ROM 的内存清理）。
+	这个 Intent 只在设置页由用户主动点按钮时才发，绝不在启动时自动弹 ——
+	那是个系统级弹窗，没头没尾地冒出来跟流氓软件没有区别。
+	-->
+	<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
 	<!--
 	lint 会建议连 fullBackupContent 一起配（那是 API 31 以下的细粒度排除规则），
@@ -44,6 +59,24 @@ AICP 应用清单
 				<category android:name="android.intent.category.LAUNCHER" />
 			</intent-filter>
 		</activity>
+
+		<!--
+		保活服务。它不做任何业务，只为把进程留住 —— 理由和"禁止往里塞逻辑"这条禁令
+		都写在 KeepAliveService 的文件头注释里。
+		exported=false：没有任何外部调用者，只有本应用的 AppContainer 启停它。
+		-->
+		<service
+			android:name=".work.KeepAliveService"
+			android:exported="false"
+			android:foregroundServiceType="specialUse">
+			<!--
+			Android 14+ 强制要求 specialUse 类型附一段用途说明。这段话是写给 Play 审核看的，
+			所以用英文，而且必须回答两个问题：这个服务干什么，以及为什么标准类型都不适用。
+			-->
+			<property
+				android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+				android:value="keep_process_alive_for_scheduled_proactive_chat: this app is an AI chat companion that can start a conversation by itself after the user has been idle for hours. The scheduled check runs in a periodic WorkManager task, which is routinely skipped once the process gets reclaimed by aggressive memory management. This service performs no work at all - it sends no message, makes no network request and polls nothing - it only keeps the process resident so that the scheduled check can actually fire. No standard foreground service type applies: there is no data sync, media playback, location, phone call or connected device involved." />
+		</service>
 	</application>
 
 </manifest>

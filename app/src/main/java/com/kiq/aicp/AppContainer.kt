@@ -34,6 +34,7 @@ import com.kiq.aicp.domain.memory.MemoryCompressor
 import com.kiq.aicp.domain.memory.MemoryLinter
 import com.kiq.aicp.domain.persona.PersonaGenerator
 import com.kiq.aicp.domain.sticker.StickerVision
+import com.kiq.aicp.work.KeepAliveService
 import com.kiq.aicp.work.StickerVisionWorker
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -130,6 +131,21 @@ class AppContainer(context: Context) {
 	 */
 	fun scheduleStickerVision() {
 		StickerVisionWorker.enqueue(appContext)
+	}
+
+	/**
+	 * 保活前台服务的开关。
+	 *
+	 * 放在容器上跟 scheduleStickerVision 同理：appContext 在这儿，
+	 * 而 AicpApplication 只负责"什么时候该开、什么时候该关"这个判断。
+	 * 启动失败（比如从后台启前台服务被系统拦了）已经在 KeepAliveService 内部咽掉并记日志，
+	 * 这一层不用再兜 —— 保活本身是"能活久点更好"，不是必须成功的前置条件。
+	 *
+	 * 重复调用是安全的：重复 start 只会让已在跑的服务多走一次 onStartCommand，
+	 * 重复 stop 对没在跑的服务是空操作。
+	 */
+	fun applyKeepAlive(enabled: Boolean) {
+		if (enabled) KeepAliveService.start(appContext) else KeepAliveService.stop(appContext)
 	}
 
 	/**

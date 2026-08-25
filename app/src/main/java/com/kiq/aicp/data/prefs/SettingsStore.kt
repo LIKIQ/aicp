@@ -188,6 +188,19 @@ class SettingsStore(
 		}
 	}
 
+	/**
+	 * 保持后台运行（保活前台服务）。
+	 *
+	 * 刻意不并进 setProactiveTuning，也刻意不在总开关关掉时把它一起置 false：
+	 * 服务的启停判据是"主动搭话开着 且 这一项开着"（见 AicpApplication），
+	 * 总闸一关服务必然停，不存在"关了还挂着"的漏洞。而这一项记的是用户的偏好 ——
+	 * 他明确开过一次，等哪天重新打开主动搭话时保活跟着回来才是他的预期，
+	 * 顺手抹掉只会让他再去点一遍，还以为上次没保存住。
+	 */
+	suspend fun setKeepAliveEnabled(enabled: Boolean) {
+		dataStore.edit { it[KEY_KEEP_ALIVE] = enabled }
+	}
+
 	suspend fun setMemoryTuning(
 		contextBudgetTokens: Int? = null,
 		keepRecentMessages: Int? = null,
@@ -255,6 +268,7 @@ class SettingsStore(
 			prefs[KEY_PROACTIVE_DAILY] = settings.proactiveDailyLimit
 			prefs[KEY_QUIET_START] = settings.quietHoursStart
 			prefs[KEY_QUIET_END] = settings.quietHoursEnd
+			prefs[KEY_KEEP_ALIVE] = settings.keepAliveEnabled
 			prefs[KEY_MEMORY_SCHEMA] = settings.memorySchema.take(MAX_MEMORY_SCHEMA)
 			prefs[KEY_DYNAMIC_COLOR] = settings.dynamicColor
 
@@ -293,6 +307,7 @@ class SettingsStore(
 			proactiveDailyLimit = this[KEY_PROACTIVE_DAILY] ?: defaults.proactiveDailyLimit,
 			quietHoursStart = this[KEY_QUIET_START] ?: defaults.quietHoursStart,
 			quietHoursEnd = this[KEY_QUIET_END] ?: defaults.quietHoursEnd,
+			keepAliveEnabled = this[KEY_KEEP_ALIVE] ?: defaults.keepAliveEnabled,
 			memorySchema = this[KEY_MEMORY_SCHEMA] ?: defaults.memorySchema,
 			dynamicColor = this[KEY_DYNAMIC_COLOR] ?: defaults.dynamicColor,
 		)
@@ -327,6 +342,7 @@ class SettingsStore(
 		private val KEY_PROACTIVE_DAILY = intPreferencesKey("proactive_daily_limit")
 		private val KEY_QUIET_START = intPreferencesKey("quiet_hours_start")
 		private val KEY_QUIET_END = intPreferencesKey("quiet_hours_end")
+		private val KEY_KEEP_ALIVE = booleanPreferencesKey("keep_alive_enabled")
 		private val KEY_MEMORY_SCHEMA = stringPreferencesKey("memory_schema")
 		private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
 		private val KEY_CONTEXT_BUDGET = intPreferencesKey("context_budget_tokens")

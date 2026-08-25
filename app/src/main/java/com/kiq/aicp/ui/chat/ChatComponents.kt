@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -494,78 +495,144 @@ fun ChatInputBar(
 	}
 }
 
+/** 表情面板的两个来源。内置预设和自己导的分开放，同一个面板里切换 */
+enum class StickerSource(val label: String) {
+	BuiltIn("内置"),
+	Custom("我的"),
+}
+
 /**
  * 表情选择面板。点一下把 [标记] 追加到输入框，不直接发送 ——
  * 用户经常是"表情 + 一句话"一起发的。
+ *
+ * 分成"内置"和"我的"两栏而不是一锅端：预设有 32 张，用户自己导的混在里面
+ * 会被挤到后面翻半天才找到，而自己导的那些恰恰是他更常用的。
+ * 来源靠分组的 builtIn 标记判断，不靠名字猜 —— 用户完全可以自建一个叫「开心」的分组。
  *
  * 高度写死是必须的：LazyVerticalGrid 放在高度不受约束的容器里会抛异常，
  * 而 bottomBar 恰好就是这种容器。
  */
 @Composable
 fun StickerPanel(
-	stickers: List<StickerEntity>,
+	builtIn: List<StickerEntity>,
+	custom: List<StickerEntity>,
 	resolveFile: (String) -> File,
 	onPick: (String) -> Unit,
 ) {
+	// 默认停在有内容的那一栏：只导过自己表情的人不该先看到一个空的"我的"
+	var source by remember(builtIn.isEmpty(), custom.isEmpty()) {
+		mutableStateOf(
+			if (custom.isNotEmpty() && builtIn.isEmpty()) StickerSource.Custom
+			else StickerSource.BuiltIn,
+		)
+	}
+
 	Surface(
 		modifier = Modifier
 			.fillMaxWidth()
-			.height(220.dp),
+			.height(260.dp),
 		color = MaterialTheme.colorScheme.surfaceVariant,
 	) {
-		if (stickers.isEmpty()) {
-			Column(
+		Column(modifier = Modifier.fillMaxWidth()) {
+			Row(
 				modifier = Modifier
 					.fillMaxWidth()
-					.padding(Dimens.spaceXl),
-				horizontalAlignment = Alignment.CenterHorizontally,
-				verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+					.padding(horizontal = Dimens.spaceSm, vertical = Dimens.spaceXs),
+				horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 			) {
-				Text("还没有表情", style = MaterialTheme.typography.titleSmall)
+				StickerSource.entries.forEach { candidate ->
+					val count = if (candidate == StickerSource.BuiltIn) builtIn.size else custom.size
+					FilterChip(
+						selected = source == candidate,
+						onClick = { source = candidate },
+						label = { Text("${candidate.label}（$count）") },
+					)
+				}
+			}
+
+			val shown = if (source == StickerSource.BuiltIn) builtIn else custom
+			if (shown.isEmpty()) {
+				StickerPanelEmptyHint(source)
+			} else {
+				StickerGrid(stickers = shown, resolveFile = resolveFile, onPick = onPick)
+			}
+		}
+	}
+}
+
+@Composable
+private fun StickerPanelEmptyHint(source: StickerSource) {
+	Column(
+		modifier = Modifier
+			.fillMaxWidth()
+			.padding(Dimens.spaceXl),
+		horizontalAlignment = Alignment.CenterHorizontally,
+		verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+	) {
+		when (source) {
+			StickerSource.BuiltIn -> {
+				Text("内置表情还没就绪", style = MaterialTheme.typography.titleSmall)
 				Text(
-					text = "去「设置 → 表情包」从相册导入。导入后给每张图起一个标记，" +
-						"聊天时写 [标记] 就会变成图片，AI 也会知道有哪些表情可用。",
+					text = "预设表情在首次启动时生成。如果这里一直是空的，" +
+						"可能是这台设备的字体不支持，去「设置 → 表情包」自己导几张也一样用。",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 					textAlign = TextAlign.Center,
 				)
 			}
-			return@Surface
-		}
 
-		LazyVerticalGrid(
-			columns = GridCells.Fixed(5),
-			modifier = Modifier.fillMaxWidth(),
-			contentPadding = PaddingValues(Dimens.spaceSm),
-			horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
-			verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
-		) {
-			items(stickers, key = { it.id }) { sticker ->
-				val bitmap by rememberLocalImage(resolveFile(sticker.localPath), 180)
-				Box(
-					modifier = Modifier
-						.aspectRatio(1f)
-						.clip(RoundedCornerShape(Dimens.radiusSmall))
-						.background(MaterialTheme.colorScheme.surface)
-						.clickable { onPick(sticker.label) },
-					contentAlignment = Alignment.Center,
-				) {
-					val image = bitmap
-					if (image != null) {
-						Image(
-							bitmap = image,
-							contentDescription = sticker.label,
-							modifier = Modifier.fillMaxWidth(),
-							contentScale = ContentScale.Fit,
-						)
-					} else {
-						Text(
-							text = sticker.label,
-							style = MaterialTheme.typography.labelSmall,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-						)
-					}
+			StickerSource.Custom -> {
+				Text("还没导入自己的表情", style = MaterialTheme.typography.titleSmall)
+				Text(
+					text = "去「设置 → 表情包」从相册导入。分组名写成情绪词（开心、无语）" +
+						"最省事，AI 会按情绪自己挑图；不是情绪的分组会由后台自动识图归类。",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					textAlign = TextAlign.Center,
+				)
+			}
+		}
+	}
+}
+
+@Composable
+private fun StickerGrid(
+	stickers: List<StickerEntity>,
+	resolveFile: (String) -> File,
+	onPick: (String) -> Unit,
+) {
+	LazyVerticalGrid(
+		columns = GridCells.Fixed(5),
+		modifier = Modifier.fillMaxWidth(),
+		contentPadding = PaddingValues(Dimens.spaceSm),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+		verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+	) {
+		items(stickers, key = { it.id }) { sticker ->
+			val bitmap by rememberLocalImage(resolveFile(sticker.localPath), 180)
+			Box(
+				modifier = Modifier
+					.aspectRatio(1f)
+					.clip(RoundedCornerShape(Dimens.radiusSmall))
+					.background(MaterialTheme.colorScheme.surface)
+					.clickable { onPick(sticker.label) },
+				contentAlignment = Alignment.Center,
+			) {
+				val image = bitmap
+				if (image != null) {
+					Image(
+						bitmap = image,
+						contentDescription = sticker.label,
+						modifier = Modifier.fillMaxWidth(),
+						contentScale = ContentScale.Fit,
+					)
+				} else {
+					Text(
+						text = sticker.label,
+						style = MaterialTheme.typography.labelSmall,
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
+					)
 				}
 			}
 		}
