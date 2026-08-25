@@ -56,7 +56,10 @@ object EntryMatcher {
 		entry.matchTerms().forEach { term ->
 			if (term.length < MIN_TERM_LENGTH) return@forEach
 			if (!haystack.contains(term.lowercase())) return@forEach
-			if (best == null || term.length > best!!.length) best = term
+			// 用局部 val 接一手再比长度，省掉 best!! —— 那个 !! 在这里是多余的，
+			// 编译器顺着 null 检查已经能收窄类型
+			val current = best
+			if (current == null || term.length > current.length) best = term
 		}
 		return best?.let { EntryHit(entry, it, it.length) }
 	}

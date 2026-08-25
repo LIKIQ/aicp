@@ -34,8 +34,9 @@ android {
 		// 3 = P14（UI 节奏统一、角色资料卡、图片多选、内置表情机制）
 		// 4 = P15~P16（数据导出恢复、备份口令加密、记忆 wiki 化与记忆体检）
 		// 5 = P17（配置码导入导出、表情按情绪分类与后台识图、GitHub 版本检测、release 签名）
-		versionCode = 5
-		versionName = "0.5.0"
+		// 6 = 0.5.1，修构建配置：关掉资源压缩，它把 NotificationCompat 要用的通知资源删了
+		versionCode = 6
+		versionName = "0.5.1"
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 		// 精确到天而不是毫秒：带毫秒会让每次构建的 BuildConfig 都变，
@@ -72,7 +73,24 @@ android {
 		}
 		release {
 			isMinifyEnabled = true
-			isShrinkResources = true
+			/*
+			 * 资源压缩关掉。
+			 *
+			 * 打开它之后 res/ 从 53 个条目掉到 15 个，被删的那批里有
+			 * notification_bg*.9.png、notification_action_background、
+			 * notification_template_* 这些 NotificationCompat 在部分 Android 版本上
+			 * 会实际取用的资源 —— 而这个应用真的发通知（主动搭话推送）。
+			 * 通知构造时找不到资源不会编译报错，只会在真机上运行时炸，
+			 * 而那条路径要等"闲置若干小时后触发"才走到，测不出来。
+			 *
+			 * 它省下的是 0.36 MB（resources.arsc 0.46 → 0.1）。
+			 * 代码 minify 省下的十几 MB 才是大头，那个保留。
+			 *
+			 * 顺带记一笔排查时踩的坑：release 包的资源文件名会被混淆成 res/2K.9.png
+			 * 这种短名，按文件名搜 "launcher" 一个都搜不到，看着像图标丢了。
+			 * 图标其实在，别被这个误导。
+			 */
+			isShrinkResources = false
 			proguardFiles(
 				getDefaultProguardFile("proguard-android-optimize.txt"),
 				"proguard-rules.pro",
