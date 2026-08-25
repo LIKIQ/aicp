@@ -434,7 +434,9 @@ fun ChatInputBar(
 		var menuOpen by remember { mutableStateOf(false) }
 
 		Box {
-			IconButton(onClick = { menuOpen = true }, enabled = !sending && !attaching) {
+			// 只在附件正在落盘时禁用（那会儿配额还没定），不看 sending：
+			// 对面回话期间照样可以挑下一张图，跟着下一句一起发出去
+			IconButton(onClick = { menuOpen = true }, enabled = !attaching) {
 				if (attaching) {
 					CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
 				} else {
@@ -466,7 +468,11 @@ fun ChatInputBar(
 
 		// 直接用 emoji 当图标，省一个 drawable：Compose 本身就能渲染它，
 		// 而且面板开着的时候换成键盘图标，用户知道点回去是收起面板
-		IconButton(onClick = onToggleStickerPanel, enabled = !sending) {
+		//
+		// 这里刻意不跟 sending 挂钩：开合表情面板只是往输入框里插一个标记，
+		// 跟"对面正在回话"没有任何关系。原先禁掉它的后果是 AI 一开口，
+		// 用户就既切不出表情、也切不回键盘，只能干等
+		IconButton(onClick = onToggleStickerPanel) {
 			Text(
 				text = if (stickerPanelOpen) "⌨" else "😊",
 				style = MaterialTheme.typography.titleMedium,
@@ -482,11 +488,16 @@ fun ChatInputBar(
 			shape = RoundedCornerShape(Dimens.radiusPill),
 		)
 
+		// 一个键管两件事，规则是"输入框里有东西就是发送，空着才是停止"。
+		// 早先只看 sending：对面一开口按钮就变成停止键，用户打好的追问根本发不出去，
+		// 想发只能先等它说完 —— 那"回复期间还能继续提问"就是句空话。
+		// 反过来想停也不难受：要停的时候输入框本来就是空的。
+		val showStop = sending && !canSend
 		FilledIconButton(
-			onClick = if (sending) onStop else onSend,
-			enabled = sending || canSend,
+			onClick = if (showStop) onStop else onSend,
+			enabled = showStop || canSend,
 		) {
-			if (sending) {
+			if (showStop) {
 				Icon(painterResource(R.drawable.ic_stop), contentDescription = "停止生成")
 			} else {
 				Icon(painterResource(R.drawable.ic_send), contentDescription = "发送")

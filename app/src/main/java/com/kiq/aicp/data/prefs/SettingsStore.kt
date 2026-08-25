@@ -18,6 +18,8 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kiq.aicp.domain.model.AicpSettings
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -26,9 +28,41 @@ class SettingsStore(
 	private val cipher: SecretCipher,
 ) {
 
-	val settings: Flow<AicpSettings> = dataStore.data.map { it.toSettings() }
+	/**
+	 * 不落盘模式下的 Key 只活在这个 StateFlow 里。进程一死就没了，正是这个开关想要的效果。
+	 * null 表示"没有内存态 Key"，此时一律以 DataStore 里的密文为准；空串是用户主动清空，
+	 * 跟 null 不是一回事，所以不能用 isNullOrEmpty 合并判断。
+	 */
+	private val memoryApiKey = MutableStateFlow<String?>(null)
+
+	val settings: Flow<AicpSettings> = combine(
+		dataStore.data.map { it.toSettings() },
+		memoryApiKey,
+	) { settings, memoryKey ->
+		if (memoryKey == null) settings else settings.copy(apiKey = memoryKey)
+	}
 
 	suspend fun current(): AicpSettings = settings.first()
+
+	/**
+	 * 切换"记住 API Key"。关掉时立刻删掉本机密文，Key 只留在内存里，本次运行照样能用。
+	 *
+	 * 关闭分支要先写内存再删密文：反过来的话两步之间 settings 会短暂发出一个空 Key 的
+	 * 快照，恰好卡在这个窗口发起的请求会被 hasEndpoint 判成"还没配置接口"。
+	 */
+	suspend fun setRememberApiKey(remember: Boolean) {
+		val currentKey = current().apiKey
+		if (!remember) memoryApiKey.value = currentKey
+		dataStore.edit { prefs ->
+			prefs[KEY_REMEMBER_API_KEY] = remember
+			if (remember && currentKey.isNotBlank()) {
+				prefs[KEY_API_KEY_ENC] = cipher.encrypt(currentKey)
+			} else if (!remember) {
+				prefs.remove(KEY_API_KEY_ENC)
+			}
+		}
+		if (remember) memoryApiKey.value = null
+	}
 
 	suspend fun setEndpoint(baseUrl: String, model: String) {
 		dataStore.edit { prefs ->
@@ -37,16 +71,21 @@ class SettingsStore(
 		}
 	}
 
-	/** 传 null 表示不动已存的 Key；传空串表示清空 */
+	/**
+	 * 传 null 表示不动已存的 Key（设置页留空就是这个意思）；传空串表示清空。
+	 * 关掉"记住"时只更新内存那份，一个字节都不写盘。
+	 */
 	suspend fun setApiKey(apiKey: String?) {
 		if (apiKey == null) return
+		val trimmed = apiKey.trim()
+		val remember = current().rememberApiKey
+		if (!remember) {
+			memoryApiKey.value = trimmed
+			return
+		}
 		dataStore.edit { prefs ->
-			val trimmed = apiKey.trim()
-			if (trimmed.isEmpty()) {
-				prefs.remove(KEY_API_KEY_ENC)
-			} else {
-				prefs[KEY_API_KEY_ENC] = cipher.encrypt(trimmed)
-			}
+			if (trimmed.isEmpty()) prefs.remove(KEY_API_KEY_ENC)
+			else prefs[KEY_API_KEY_ENC] = cipher.encrypt(trimmed)
 		}
 	}
 
@@ -242,6 +281,10 @@ class SettingsStore(
 	 * 两处各夹一次迟早会出现两套不一样的上下界。
 	 */
 	suspend fun applyImported(settings: AicpSettings) {
+		val importedKey = settings.apiKey.trim()
+		val activeKey = importedKey.ifEmpty { current().apiKey }
+		// 不落盘模式同样先兜内存再动 DataStore，理由同 setRememberApiKey
+		if (!settings.rememberApiKey) memoryApiKey.value = activeKey
 		dataStore.edit { prefs ->
 			prefs[KEY_BASE_URL] = settings.baseUrl
 			prefs[KEY_MODEL] = settings.model
@@ -272,9 +315,15 @@ class SettingsStore(
 			prefs[KEY_MEMORY_SCHEMA] = settings.memorySchema.take(MAX_MEMORY_SCHEMA)
 			prefs[KEY_DYNAMIC_COLOR] = settings.dynamicColor
 
-			val key = settings.apiKey.trim()
-			if (key.isNotEmpty()) prefs[KEY_API_KEY_ENC] = cipher.encrypt(key)
+			// 导入的这份配置说了要不要记住，就按它来：勾着才写密文，没勾就把旧密文清掉
+			if (settings.rememberApiKey && activeKey.isNotEmpty()) {
+				prefs[KEY_API_KEY_ENC] = cipher.encrypt(activeKey)
+			} else {
+				prefs.remove(KEY_API_KEY_ENC)
+			}
+			prefs[KEY_REMEMBER_API_KEY] = settings.rememberApiKey
 		}
+		if (settings.rememberApiKey) memoryApiKey.value = null
 	}
 
 	private fun Preferences.toSettings(): AicpSettings {
@@ -283,6 +332,7 @@ class SettingsStore(
 		return AicpSettings(
 			baseUrl = this[KEY_BASE_URL] ?: defaults.baseUrl,
 			apiKey = storedKey?.let { cipher.decrypt(it) } ?: defaults.apiKey,
+			rememberApiKey = this[KEY_REMEMBER_API_KEY] ?: defaults.rememberApiKey,
 			model = this[KEY_MODEL] ?: defaults.model,
 			compressModel = this[KEY_COMPRESS_MODEL] ?: defaults.compressModel,
 			visionModel = this[KEY_VISION_MODEL] ?: defaults.visionModel,
@@ -321,6 +371,7 @@ class SettingsStore(
 
 		private val KEY_BASE_URL = stringPreferencesKey("base_url")
 		private val KEY_API_KEY_ENC = stringPreferencesKey("api_key_enc")
+		private val KEY_REMEMBER_API_KEY = booleanPreferencesKey("remember_api_key")
 		private val KEY_MODEL = stringPreferencesKey("model")
 		private val KEY_COMPRESS_MODEL = stringPreferencesKey("compress_model")
 		private val KEY_VISION_MODEL = stringPreferencesKey("vision_model")

@@ -2,9 +2,10 @@
 // 聊天页。
 //
 // 流式渲染取的是 state.displayContent(message)：正在生成的那条用 ViewModel 里的实时文本，
-// 其余的读库。所以打字机效果不受 Room 写入节流影响。
+// 其余的读库。所以打字机效果不受 Room 写入节流影响。群聊多个角色同时在流时，
+// 每条气泡各查自己那份增量。
 //
-// 自动滚动的 key 里带了 streamingText.length / 40，让生成过程中每隔几十个字跟一次底，
+// 自动滚动的 key 里带了所有在流消息的总字数 / 40，让生成过程中每隔几十个字跟一次底，
 // 而不是每个 token 都触发一次动画。
 //
 // 顶栏头像和「会话资料」入口的分工：群聊有自己的名字和头像，单聊直接借对面性格的，
@@ -146,7 +147,8 @@ fun ChatScreen(
 		ActivityResultContracts.PickVisualMedia(),
 	) { uri -> uri?.let { viewModel.pickGroupAvatar(it) } }
 
-	LaunchedEffect(state.messages.size, state.streamingText.length / 40) {
+	val streamingProgress = state.streamingTexts.values.sumOf { it.length }
+	LaunchedEffect(state.messages.size, streamingProgress / 40) {
 		if (state.messages.isNotEmpty()) {
 			listState.animateScrollToItem(state.messages.lastIndex)
 		}
@@ -370,8 +372,8 @@ fun ChatScreen(
 			}
 
 			// 两种"正在输入"：请求刚发出还没吐字（thinking），和分段之间的打字停顿（typingPersonaName）
-			val thinking = state.messages.lastOrNull()
-				?.takeIf { it.status == MessageStatus.STREAMING && state.streamingText.isEmpty() }
+			val thinking = state.messages.lastOrNull { it.status == MessageStatus.STREAMING }
+				?.takeIf { state.streamingTexts[it.id].isNullOrEmpty() }
 			when {
 				state.typingPersonaName != null -> ThinkingHint(state.typingPersonaName!!)
 				thinking != null -> ThinkingHint(state.personaOf(thinking.personaId)?.name ?: "对方")

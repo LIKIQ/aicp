@@ -38,8 +38,10 @@ android {
 		// 7 = 0.5.2，内置 32 个预设表情（系统 emoji 渲染成 PNG，按情绪分组）
 		// 8 = 0.5.3，修键盘/导航栏遮挡输入栏、修跳设置后返回错位、表情面板分内置与自定义、
 		//     主动搭话可保持后台运行
-		versionCode = 8
-		versionName = "0.5.3"
+		// 9 = 0.5.4，群聊多角色并发流式回复（错峰开口、后开口的能接上先说完的话）、
+		//     回复期间可以继续追问、API Key 可以选择不保存在本机
+		versionCode = 9
+		versionName = "0.5.4"
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 		// 精确到天而不是毫秒：带毫秒会让每次构建的 BuildConfig 都变，

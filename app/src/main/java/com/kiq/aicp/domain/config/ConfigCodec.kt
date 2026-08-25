@@ -31,6 +31,7 @@ data class ConfigPayload(
 	val v: Int = ConfigCodec.CONFIG_VERSION,
 	val baseUrl: String = "",
 	val apiKey: String = "",
+	val rememberApiKey: Boolean = true,
 	val model: String = "",
 	val compressModel: String = "",
 	val visionModel: String = "",
@@ -90,6 +91,8 @@ object ConfigCodec {
 	 *
 	 * password 为空就走明文，同时把 apiKey 抹掉——明文码是要贴到微信、笔记、
 	 * 甚至截图里的东西，凭证不能跟着走。填了口令才带 Key，而且那份码没口令解不开。
+	 * 这里是否在本机记住 Key 不影响加密配置码是否带 Key：用户明确填了口令导出，
+	 * 就是在要求把凭证一起带走，持久化策略只约束本机 DataStore。
 	 */
 	fun encode(settings: AicpSettings, password: CharArray? = null): String {
 		val sealed = password != null && password.isNotEmpty()
@@ -160,6 +163,7 @@ object ConfigCodec {
 		v = CONFIG_VERSION,
 		baseUrl = baseUrl,
 		apiKey = if (includeKey) apiKey else "",
+		rememberApiKey = rememberApiKey,
 		model = model,
 		compressModel = compressModel,
 		visionModel = visionModel,
@@ -196,6 +200,7 @@ object ConfigCodec {
 	private fun ConfigPayload.toSettings() = AicpSettings(
 		baseUrl = baseUrl.trim(),
 		apiKey = apiKey.trim(),
+		rememberApiKey = rememberApiKey,
 		model = model.trim(),
 		compressModel = compressModel.trim(),
 		visionModel = visionModel.trim(),

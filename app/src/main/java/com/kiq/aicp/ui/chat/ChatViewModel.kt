@@ -3,9 +3,13 @@
 // 组装上下文 → 流式请求 → 落库 → 触发压缩。
 //
 // 流式输出走"双轨"：
-// - UI 轨：每个增量都更新 streamingText，打字机效果无延迟
+// - UI 轨：每个增量都更新 streamingTexts[messageId]，打字机效果无延迟
 // - 落库轨：按字数和时间节流写 Room，避免每个 token 都写一次盘
 // 崩了或被杀进程时，库里至少是最近一次 flush 的完整文本，不会拼出乱序内容。
+//
+// 群聊是多角色并发回复：每个角色一条独立消息、一份独立增量，谁先说完谁先入库。
+// 角色之间错峰开口（见 send 里的 stagger），后开口的那个构建上下文时能看到先说完的话。
+// 用户在这期间还能接着发下一句，所以"是否正在回复"是个计数（activeReplyCount）而不是布尔量。
 //
 // 附件是"选完立刻落盘"，attachments 里躺的都是已经在磁盘上的东西。相册多选进来一批时
 // 逐张独立成败（saveOneImage），一张读不出来不拖累其余的，最后只汇总一条提示。
@@ -61,6 +65,7 @@ import java.io.File
 import java.time.LocalTime
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -69,6 +74,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 
 /** 已落盘、还没随消息发出去的附件。id 只在本地用于删除，跟数据库无关 */
 data class PendingAttachmentUi(
@@ -126,23 +132,27 @@ data class ChatUiState(
 	val sending: Boolean = false,
 	val error: String? = null,
 	val notice: String? = null,
-	/** 正在流式输出的那条消息，UI 用 streamingText 覆盖它的正文 */
-	val streamingMessageId: Long? = null,
-	val streamingText: String = "",
+	/**
+	 * 正在流式输出的消息文本，messageId → 已收到的增量。
+	 * 群聊多个角色同时回复时每人一条，所以只能是 map；早先那对
+	 * streamingMessageId/streamingText 单值字段会被后启动的角色覆盖，
+	 * 表现是先开口的那条气泡在别人开始打字的瞬间闪回旧内容。
+	 */
+	val streamingTexts: Map<Long, String> = emptyMap(),
 	val attachments: List<PendingAttachmentUi> = emptyList(),
 	val attaching: Boolean = false,
 	/** 会话内所有消息的附件，按 messageId 分组给气泡渲染用 */
 	val attachmentsByMessage: Map<Long, List<MessageAttachmentEntity>> = emptyMap(),
 	/** label → 表情图相对路径。渲染 [标记] 时查这张表，比每条消息查库便宜 */
 	val stickerIndex: Map<String, String> = emptyMap(),
-	/** 分段发送的段间"正在输入…"提示，null 表示当前没在等下一段 */
-	val typingPersonaName: String? = null,
+	/** 分段发送的段间"正在输入…"提示。群聊会有多人同时在等下一段，所以按角色名存 */
+	val typingPersonaNames: Set<String> = emptySet(),
 	/** 「会话资料」对话框的草稿，null 表示没打开 */
 	val profileDraft: GroupProfileDraft? = null,
 ) {
 	val title: String get() = conversation?.title ?: "会话"
 	val isGroup: Boolean get() = participants.size > 1
-	val canSend: Boolean get() = (input.isNotBlank() || attachments.isNotEmpty()) && !sending && !attaching
+	val canSend: Boolean get() = (input.isNotBlank() || attachments.isNotEmpty()) && !attaching
 	val notConfigured: Boolean get() = !settings.hasEndpoint
 
 	/**
@@ -184,7 +194,10 @@ data class ChatUiState(
 
 	/** 渲染用：正在流式的那条取实时文本 */
 	fun displayContent(message: MessageEntity): String =
-		if (message.id == streamingMessageId && streamingText.isNotEmpty()) streamingText else message.content
+		streamingTexts[message.id]?.takeIf { it.isNotEmpty() } ?: message.content
+
+	/** 段间提示只显示一个人，多人同时打字时取排序后的第一个，避免每次重组换人 */
+	val typingPersonaName: String? get() = typingPersonaNames.minOrNull()
 }
 
 private data class Transient(
@@ -192,11 +205,10 @@ private data class Transient(
 	val sending: Boolean = false,
 	val error: String? = null,
 	val notice: String? = null,
-	val streamingMessageId: Long? = null,
-	val streamingText: String = "",
+	val streamingTexts: Map<Long, String> = emptyMap(),
 	val attachments: List<PendingAttachmentUi> = emptyList(),
 	val attaching: Boolean = false,
-	val typingPersonaName: String? = null,
+	val typingPersonaNames: Set<String> = emptySet(),
 	val profileDraft: GroupProfileDraft? = null,
 )
 
@@ -217,7 +229,21 @@ class ChatViewModel(
 ) : ViewModel() {
 
 	private val transient = MutableStateFlow(Transient())
-	private var sendJob: Job? = null
+	/**
+	 * 每次用户发送都是一轮独立任务。对面正在回时还能继续发下一句，
+	 * 所以这里不能再只有一个 sendJob —— 后一轮会覆盖前一轮的句柄，stop 也只能停掉最后一轮。
+	 */
+	private val sendJobs = mutableSetOf<Job>()
+	private val replyJobs = mutableSetOf<Job>()
+
+	/**
+	 * 当前有几路回复在跑。sending 是它的派生值：只要还有一路没结束就为 true。
+	 *
+	 * 用计数而不是布尔量，是因为用户在对面回话时还能接着发下一句，同时还有重试和
+	 * 主动搭话这两条路 —— 谁先结束都不能把别人的"正在回复"状态一起关掉。
+	 * 读写都在 viewModelScope 的主调度器上串行发生，所以不用原子类型。
+	 */
+	private var activeReplyCount = 0
 	private var idleJob: Job? = null
 	private var attachSeq = 0L
 
@@ -256,13 +282,12 @@ class ChatViewModel(
 			sending = t.sending,
 			error = t.error,
 			notice = t.notice,
-			streamingMessageId = t.streamingMessageId,
-			streamingText = t.streamingText,
+			streamingTexts = t.streamingTexts,
 			attachments = t.attachments,
 			attaching = t.attaching,
 			attachmentsByMessage = attachments.groupBy { it.messageId },
 			stickerIndex = stickerIndex,
-			typingPersonaName = t.typingPersonaName,
+			typingPersonaNames = t.typingPersonaNames,
 			profileDraft = t.profileDraft,
 		)
 	}.stateIn(
@@ -481,20 +506,22 @@ class ChatViewModel(
 	fun send() {
 		val text = transient.value.input.trim()
 		val pending = transient.value.attachments
-		if ((text.isEmpty() && pending.isEmpty()) || transient.value.sending) return
+		if (text.isEmpty() && pending.isEmpty()) return
 
 		transient.update {
-			it.copy(input = "", sending = true, error = null, notice = null, attachments = emptyList())
+			it.copy(input = "", error = null, notice = null, attachments = emptyList())
 		}
 
-		sendJob = viewModelScope.launch {
+		beginActiveReply()
+		val sendRoundJob = viewModelScope.launch {
 			try {
 				val settings = settingsStore.current()
 				if (!settings.hasEndpoint) {
-					// 附件已经从待发列表摘掉了，失败时放回去，别让用户重选一遍
+					// 附件已经从待发列表摘掉了，失败时放回去，别让用户重选一遍。
+					// sending 交给 finally 里的 endActiveReply 收，这里别自己关：
+					// 另一轮回复可能还在跑
 					transient.update {
 						it.copy(
-							sending = false,
 							input = text,
 							attachments = pending,
 							error = "还没配置接口地址和 API Key，去设置页填一下",
@@ -515,7 +542,7 @@ class ChatViewModel(
 
 				val speakers = pickSpeakers(text, settings)
 				if (speakers.isEmpty()) {
-					transient.update { it.copy(sending = false, error = "这个会话里没有可发言的性格") }
+					transient.update { it.copy(error = "这个会话里没有可发言的性格") }
 					return@launch
 				}
 
@@ -526,10 +553,20 @@ class ChatViewModel(
 				val readDelay = settings.humanizeConfig().takeIf { it.enabled }?.readDelayMs ?: 0L
 				if (readDelay > 0) delay(readDelay)
 
-				for (persona in speakers) {
-					val ok = streamOneReply(persona, settings)
-					if (!ok) break
+				// 群聊错峰开口：所有角色的协程一起启动（互不阻塞、气泡可以同时在流），
+				// 但第 i 个角色进 streamOneReply 之前先压一段。ContextBuilder.build 是
+				// 现查库的，压过这段之后再构建上下文，先说完的人已经落库成 OK 了，
+				// 后开口的自然能接上前面的话——这就是"并发发起，后完成的能看到已完成的"。
+				// 零延迟同时 build 的话每个人看到的都是同一份旧上下文，群聊会变成各说各的。
+				val stagger = if (speakers.size > 1) groupStaggerMs(settings) else 0L
+				val roundReplyJobs = speakers.mapIndexed { index, persona ->
+					launch {
+						if (stagger > 0 && index > 0) delay(stagger * index)
+						streamOneReply(persona, settings)
+					}.also { replyJobs += it }
 				}
+				joinAll(*roundReplyJobs.toTypedArray())
+				replyJobs.removeAll(roundReplyJobs.toSet())
 
 				runCompression(settings)
 			} catch (e: Exception) {
@@ -537,32 +574,69 @@ class ChatViewModel(
 				if (e is kotlinx.coroutines.CancellationException) throw e
 				transient.update { it.copy(error = e.message ?: "发送失败") }
 			} finally {
-				transient.update {
-					it.copy(sending = false, streamingMessageId = null, streamingText = "")
+				endActiveReply()
+			}
+		}
+		sendJobs += sendRoundJob
+		sendRoundJob.invokeOnCompletion { sendJobs -= sendRoundJob }
+	}
+
+	/**
+	 * 中断所有正在跑的回复。群聊里每个角色已经流出来的半截文本都保留。
+	 *
+	 * 用户可能已经追问了好几轮，所以这里要把 sendJobs 全清 —— 只停最后一轮的话，
+	 * 前面那些还在打字，按钮却显示成"可发送"，看着像卡住了。
+	 */
+	fun stop() {
+		val partials = transient.value.streamingTexts
+		replyJobs.toList().forEach { it.cancel() }
+		replyJobs.clear()
+		sendJobs.toList().forEach { it.cancel() }
+		sendJobs.clear()
+		activeReplyCount = 0
+
+		viewModelScope.launch {
+			partials.forEach { (messageId, partial) ->
+				if (partial.isBlank()) {
+					chatRepository.failAssistant(messageId, "已手动停止")
+				} else {
+					chatRepository.finishAssistant(messageId, partial)
 				}
+			}
+			transient.update {
+				it.copy(
+					sending = false,
+					streamingTexts = emptyMap(),
+					typingPersonaNames = emptySet(),
+					notice = "已停止",
+				)
 			}
 		}
 	}
 
-	/** 中断当前回复。已经流出来的半截文本保留，用户能看到说到哪断了 */
-	fun stop() {
-		val streamingId = transient.value.streamingMessageId
-		val partial = transient.value.streamingText
-		sendJob?.cancel()
-		sendJob = null
-
-		viewModelScope.launch {
-			if (streamingId != null) {
-				if (partial.isBlank()) {
-					chatRepository.failAssistant(streamingId, "已手动停止")
-				} else {
-					chatRepository.finishAssistant(streamingId, partial)
-				}
-			}
-			transient.update {
-				it.copy(sending = false, streamingMessageId = null, streamingText = "", notice = "已停止")
-			}
+	/**
+	 * 群里第 N 个人比第 N-1 个人晚开口多久。开着真人模拟就复用"看一眼再打字"的
+	 * readDelayMs（用户调过的节奏），关掉时退到一个固定值。
+	 */
+	private fun groupStaggerMs(settings: AicpSettings): Long {
+		val config = settings.humanizeConfig()
+		return if (config.enabled) {
+			config.readDelayMs.coerceAtLeast(GROUP_STAGGER_FALLBACK_MS)
+		} else {
+			GROUP_STAGGER_FALLBACK_MS
 		}
+	}
+
+	/** 开一路回复：计数 +1 并把 sending 点亮 */
+	private fun beginActiveReply() {
+		activeReplyCount += 1
+		transient.update { it.copy(sending = true) }
+	}
+
+	/** 收一路回复：最后一路结束时才熄灭 sending */
+	private fun endActiveReply() {
+		activeReplyCount = (activeReplyCount - 1).coerceAtLeast(0)
+		transient.update { it.copy(sending = activeReplyCount > 0) }
 	}
 
 	private suspend fun pickSpeakers(userText: String, settings: AicpSettings): List<PersonaEntity> {
@@ -614,7 +688,8 @@ class ChatViewModel(
 		memoryRepository.markCardsUsed(context.usedCardIds)
 
 		val messageId = chatRepository.startAssistant(conversationId, persona.id)
-		transient.update { it.copy(streamingMessageId = messageId, streamingText = "") }
+		// 占位先写一条空串：UI 靠"这条在 map 里但内容为空"判断该显示"正在输入…"
+		transient.update { it.copy(streamingTexts = it.streamingTexts + (messageId to "")) }
 
 		// 提示词里给模型的是情绪清单，所以这一轮要拿同一份清单把它写的 [情绪] 换回具体某张图。
 		// 一轮之内清单不会变，取一次就够
@@ -655,7 +730,9 @@ class ChatViewModel(
 						// 换图要赶在文本定型之前：这段文字既要落库、也会进下一轮上下文，
 						// 留到渲染时再挑图，同一条消息每次重组都会换一张脸
 						resolveEmotionMarkers(buffer, emotions)
-						transient.update { it.copy(streamingText = buffer.toString()) }
+						transient.update {
+							it.copy(streamingTexts = it.streamingTexts + (messageId to buffer.toString()))
+						}
 
 						pendingChars += chunk.text.length
 						val nowMs = System.currentTimeMillis()
@@ -675,7 +752,7 @@ class ChatViewModel(
 			val segments = ReplySegmenter.split(reply, settings.humanizeConfig())
 
 			chatRepository.finishAssistant(messageId, segments.first())
-			transient.update { it.copy(streamingMessageId = null, streamingText = "") }
+			transient.update { it.copy(streamingTexts = it.streamingTexts - messageId) }
 			bumpStickerUsage(reply)
 			emitFollowUpSegments(persona, segments.drop(1), settings)
 			true
@@ -685,10 +762,10 @@ class ChatViewModel(
 			// 半截文本要留下，别让用户以为什么都没发生
 			if (buffer.isNotEmpty()) chatRepository.updateStreaming(messageId, buffer.toString())
 			chatRepository.failAssistant(messageId, e.message ?: "请求失败")
+			// 只摘掉自己那条，别动别人的：群聊里一个角色失败不该让其他人的气泡回退成静态文本
 			transient.update {
 				it.copy(
-					streamingMessageId = null,
-					streamingText = "",
+					streamingTexts = it.streamingTexts - messageId,
 					error = describeError(e),
 				)
 			}
@@ -714,10 +791,15 @@ class ChatViewModel(
 		val config = settings.humanizeConfig()
 
 		followUps.forEach { segment ->
-			// typing 标记让 UI 显示"正在输入…"，跟真人打字的间隙对上
-			transient.update { it.copy(typingPersonaName = persona.name) }
-			delay(ReplySegmenter.typingDelayMs(segment, config))
-			transient.update { it.copy(typingPersonaName = null) }
+			// typing 标记让 UI 显示"正在输入…"，跟真人打字的间隙对上。
+			// 用 set 增删而不是直接赋值：群聊里两个人可能同时在等下一段，
+			// 单值字段会被后来者覆盖，先结束的那个再清空就把还在打字的人也擦掉了
+			transient.update { it.copy(typingPersonaNames = it.typingPersonaNames + persona.name) }
+			try {
+				delay(ReplySegmenter.typingDelayMs(segment, config))
+			} finally {
+				transient.update { it.copy(typingPersonaNames = it.typingPersonaNames - persona.name) }
+			}
 			chatRepository.appendAssistantSegment(conversationId, persona.id, segment)
 		}
 	}
@@ -778,12 +860,13 @@ class ChatViewModel(
 
 		val speaker = pickProactiveSpeaker() ?: return
 
-		transient.update { it.copy(sending = true, error = null) }
+		transient.update { it.copy(error = null) }
+		beginActiveReply()
 		try {
 			streamOneReply(speaker, settings, extraInstruction = ProactiveDecider.INSTRUCTION)
 			proactiveRepository.recordGlobalProactive()
 		} finally {
-			transient.update { it.copy(sending = false) }
+			endActiveReply()
 		}
 	}
 
@@ -895,8 +978,9 @@ class ChatViewModel(
 		if (transient.value.sending) return
 		val failed = uiState.value.messages.lastOrNull { it.status == MessageStatus.FAILED } ?: return
 
-		transient.update { it.copy(sending = true, error = null) }
-		sendJob = viewModelScope.launch {
+		transient.update { it.copy(error = null) }
+		beginActiveReply()
+		val retryJob = viewModelScope.launch {
 			try {
 				val settings = settingsStore.current()
 				chatRepository.deleteMessage(failed.id)
@@ -912,9 +996,11 @@ class ChatViewModel(
 				if (e is kotlinx.coroutines.CancellationException) throw e
 				transient.update { it.copy(error = e.message ?: "重试失败") }
 			} finally {
-				transient.update { it.copy(sending = false) }
+				endActiveReply()
 			}
 		}
+		sendJobs += retryJob
+		retryJob.invokeOnCompletion { sendJobs -= retryJob }
 	}
 
 	fun deleteMessage(messageId: Long) {
@@ -1085,6 +1171,12 @@ class ChatViewModel(
 
 		/** 空闲哨兵的轮询间隔。一分钟一次足够，主动搭话的阈值是按小时算的 */
 		private const val IDLE_CHECK_INTERVAL_MS = 60_000L
+
+		/**
+		 * 群聊错峰开口的间隔。关掉真人模拟时也留一点，否则同一秒 build 出来的
+		 * 上下文完全一样，几个角色会同时回同一句话、彼此当没听见。
+		 */
+		private const val GROUP_STAGGER_FALLBACK_MS = 700L
 
 		fun factory(conversationId: Long): (CreationExtras) -> ChatViewModel = { _ ->
 			val c = AicpApplication.container()

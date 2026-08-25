@@ -200,7 +200,12 @@ private fun EndpointSection(state: SettingsUiState, viewModel: SettingsViewModel
 			placeholder = {
 				Text(if (state.settings.apiKey.isEmpty()) "sk-..." else "留空则保持不变")
 			},
-			supportingText = { Text("已保存：${state.savedKeyHint}　加密后存在本机，不上传") },
+			supportingText = {
+				Text(
+					if (state.settings.rememberApiKey) "当前：${state.savedKeyHint}　加密后存在本机，不上传"
+					else "当前：${state.savedKeyHint}　仅保留在内存，不会写入本机存储",
+				)
+			},
 			visualTransformation = if (keyVisible) {
 				VisualTransformation.None
 			} else {
@@ -215,6 +220,25 @@ private fun EndpointSection(state: SettingsUiState, viewModel: SettingsViewModel
 			shape = PillShape,
 			modifier = Modifier.fillMaxWidth(),
 		)
+
+		Row(
+			modifier = Modifier.fillMaxWidth(),
+			horizontalArrangement = Arrangement.SpaceBetween,
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Column(modifier = Modifier.weight(1f)) {
+				Text("记住 API Key")
+				Text(
+					if (state.settings.rememberApiKey) "加密保存在本机，不会上传"
+					else "只在本次运行期间有效，应用重启后需要重新填写",
+					style = MaterialTheme.typography.bodySmall,
+				)
+			}
+			Switch(
+				checked = state.settings.rememberApiKey,
+				onCheckedChange = viewModel::requestRememberApiKey,
+			)
+		}
 
 		OutlinedTextField(
 			value = state.modelField,
@@ -235,8 +259,23 @@ private fun EndpointSection(state: SettingsUiState, viewModel: SettingsViewModel
 			OutlinedButton(onClick = viewModel::testConnection, enabled = state.canTest) { Text("测试连接") }
 		}
 
+		// 关掉开关是个不可逆动作（密文当场删掉），所以拦一道确认
+		if (state.confirmForgetApiKey) {
+			AlertDialog(
+				onDismissRequest = viewModel::dismissRememberApiKeyConfirmation,
+				title = { Text("不再记住 API Key？") },
+				text = { Text("已保存的 Key 会立即从本机删除，之后只在本次运行期间有效；应用重启后需要重新填写。") },
+				confirmButton = {
+					TextButton(onClick = viewModel::confirmRememberApiKeyOff) { Text("关闭并删除") }
+				},
+				dismissButton = {
+					TextButton(onClick = viewModel::dismissRememberApiKeyConfirmation) { Text("取消") }
+				},
+			)
+		}
+
 		if (state.settings.apiKey.isNotEmpty()) {
-			TextButton(onClick = viewModel::clearApiKey) { Text("清除已保存的 Key") }
+			TextButton(onClick = viewModel::clearApiKey) { Text("清除当前 Key") }
 		}
 
 		if (state.savedHint) {

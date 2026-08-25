@@ -13,6 +13,8 @@ import com.kiq.aicp.domain.sticker.StickerParser
 data class AicpSettings(
 	val baseUrl: String = "",
 	val apiKey: String = "",
+	/** 是否把 API Key 加密保存在本机；关闭后仅在当前进程内有效 */
+	val rememberApiKey: Boolean = true,
 	val model: String = "",
 
 	/** 压缩专用模型，留空表示跟随 model。用便宜模型做摘要能省不少钱 */

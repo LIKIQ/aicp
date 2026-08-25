@@ -24,3 +24,6 @@ signing.properties
 # 系统垃圾
 .DS_Store
 Thumbs.db
+
+# AI 协作工具的本地规划目录，跟代码无关
+.narrafork/

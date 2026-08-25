@@ -30,6 +30,7 @@ object ConfigDiff {
 	private val fields = listOf(
 		Field("接口地址") { blankAs(it.baseUrl, "未填") },
 		Field("主模型") { blankAs(it.model, "未填") },
+		Field("记住 API Key") { onOff(it.rememberApiKey) },
 		Field("压缩模型") { blankAs(it.compressModel, "跟随主模型") },
 		Field("识图模型") { blankAs(it.visionModel, "跟随主模型") },
 		Field("每轮带图上限") { "${it.maxImagesInContext} 张" },

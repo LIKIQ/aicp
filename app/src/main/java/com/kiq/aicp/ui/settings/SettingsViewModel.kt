@@ -66,7 +66,6 @@ sealed interface ConnectionTest {
 	data class Ok(val reply: String) : ConnectionTest
 	data class Fail(val message: String, val retryable: Boolean) : ConnectionTest
 }
-
 /** 备份相关的在跑任务。导出和解压都可能几秒，UI 靠它决定禁用按钮和转圈文案 */
 enum class BackupJob { EXPORTING, CHECKING, RESTORING, CANCELLING }
 
@@ -140,11 +139,19 @@ data class UpdateUiState(
 	val notice: String? = null,
 )
 
+data class TransientState(
+	val backup: BackupUiState,
+	val configCode: ConfigCodeUiState,
+	val update: UpdateUiState,
+	val confirmForgetApiKey: Boolean,
+)
+
 data class SettingsUiState(
 	val settings: AicpSettings = AicpSettings(),
 	val draft: EndpointDraft = EndpointDraft(),
 	val test: ConnectionTest? = null,
 	val savedHint: Boolean = false,
+	val confirmForgetApiKey: Boolean = false,
 	val backup: BackupUiState = BackupUiState(),
 	val configCode: ConfigCodeUiState = ConfigCodeUiState(),
 	val update: UpdateUiState = UpdateUiState(),
@@ -171,6 +178,7 @@ class SettingsViewModel(
 	private val draft = MutableStateFlow(EndpointDraft())
 	private val test = MutableStateFlow<ConnectionTest?>(null)
 	private val savedHint = MutableStateFlow(false)
+	private val confirmForgetApiKey = MutableStateFlow(false)
 	private val backup = MutableStateFlow(BackupUiState())
 	private val configCode = MutableStateFlow(ConfigCodeUiState())
 	private val update = MutableStateFlow(UpdateUiState())
@@ -180,8 +188,10 @@ class SettingsViewModel(
 	 * 不是为了好看：combine 的类型化重载最多接五条，直接摊平就得退回不带类型的数组版本，
 	 * 那会把五个参数变成 Array<Any?> 一路强转下去。
 	 */
-	private val transientFlows: Flow<Triple<BackupUiState, ConfigCodeUiState, UpdateUiState>> =
-		combine(backup, configCode, update) { b, c, u -> Triple(b, c, u) }
+	private val transientFlows: Flow<TransientState> =
+		combine(backup, configCode, update, confirmForgetApiKey) { b, c, u, confirm ->
+			TransientState(b, c, u, confirm)
+		}
 
 	val uiState: StateFlow<SettingsUiState> =
 		combine(
@@ -190,15 +200,16 @@ class SettingsViewModel(
 			test,
 			savedHint,
 			transientFlows,
-		) { settings, d, t, hint, (b, c, u) ->
+		) { settings, d, t, hint, transient ->
 			SettingsUiState(
 				settings = settings,
 				draft = d,
 				test = t,
 				savedHint = hint,
-				backup = b,
-				configCode = c,
-				update = u,
+				confirmForgetApiKey = transient.confirmForgetApiKey,
+				backup = transient.backup,
+				configCode = transient.configCode,
+				update = transient.update,
 			)
 		}.stateIn(
 			scope = viewModelScope,
@@ -334,6 +345,23 @@ class SettingsViewModel(
 			draft.value = EndpointDraft()
 			savedHint.value = true
 		}
+	}
+
+	fun requestRememberApiKey(remember: Boolean) {
+		if (remember) {
+			viewModelScope.launch { settingsStore.setRememberApiKey(true) }
+		} else {
+			confirmForgetApiKey.value = true
+		}
+	}
+
+	fun dismissRememberApiKeyConfirmation() {
+		confirmForgetApiKey.value = false
+	}
+
+	fun confirmRememberApiKeyOff() {
+		confirmForgetApiKey.value = false
+		viewModelScope.launch { settingsStore.setRememberApiKey(false) }
 	}
 
 	fun clearApiKey() {
