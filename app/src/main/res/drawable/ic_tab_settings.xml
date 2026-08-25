@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/drawable/ic_tab_settings.xml
+底部 tab「设置」图标：三档滑块（tune 造型）
+齿轮的 path 手写太容易画歪，滑块同样表达"调参"，而且这个 App 的设置页确实全是滑块和开关
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="24dp"
+	android:height="24dp"
+	android:viewportWidth="24"
+	android:viewportHeight="24">
+	<!-- 三条轨道 -->
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M3,5.5 H21 V7.5 H3 Z M3,11.5 H21 V13.5 H3 Z M3,17.5 H21 V19.5 H3 Z" />
+	<!-- 三个滑块 -->
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M6.5,6.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 Z" />
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M13,12.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 Z" />
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M8.5,18.5 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 Z" />
+</vector>

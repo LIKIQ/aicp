@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/xml/data_extraction_rules.xml
+Android 12+ 的备份与设备迁移规则。
+这里把两条通道全部排空：聊天记录、记忆卡片、加密后的 API Key 一律不出设备，
+不进 Google 云备份，也不随"换机迁移"复制过去。
+
+需要备份时走应用内导出（用户自己决定文件去哪），不依赖系统通道。
+allowBackup=false 仍然保留在 manifest 里，那条管的是 API 31 以下的老设备。
+-->
+<data-extraction-rules>
+	<cloud-backup>
+		<exclude domain="root" />
+		<exclude domain="file" />
+		<exclude domain="database" />
+		<exclude domain="sharedpref" />
+		<exclude domain="external" />
+	</cloud-backup>
+	<device-transfer>
+		<exclude domain="root" />
+		<exclude domain="file" />
+		<exclude domain="database" />
+		<exclude domain="sharedpref" />
+		<exclude domain="external" />
+	</device-transfer>
+</data-extraction-rules>

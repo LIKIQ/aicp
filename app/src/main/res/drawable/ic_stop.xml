@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/drawable/ic_stop.xml
+停止生成：圆角方块
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="24dp"
+	android:height="24dp"
+	android:viewportWidth="24"
+	android:viewportHeight="24">
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M7,6 H17 A1,1 0 0 1 18,7 V17 A1,1 0 0 1 17,18 H7 A1,1 0 0 1 6,17 V7 A1,1 0 0 1 7,6 Z" />
+</vector>

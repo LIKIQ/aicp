@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/values/themes.xml
+只负责首帧窗口外观（Compose 接管之后就不生效了）。
+没引 AppCompat / Material Components，所以父主题用平台的 Material.Light.NoActionBar。
+不设 statusBarColor / navigationBarColor：targetSdk 35+ 起这两个属性已失效，设了只会招 lint 警告。
+-->
+<resources>
+	<style name="Theme.Aicp" parent="@android:style/Theme.Material.Light.NoActionBar">
+		<item name="android:windowBackground">@color/aicp_window_background</item>
+	</style>
+</resources>

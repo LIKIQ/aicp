@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/xml/network_security_config.xml
+网络安全策略（系统层）
+
+为什么 base-config 放开了明文：
+Android 的 network-security-config 只认精确域名/IP，不支持 192.168.*、CIDR 这类通配，
+所以"只放行局域网明文"这件事在这一层根本表达不出来。
+
+真正的守门人在应用层：data/remote/CleartextGuard.kt
+规则是 —— http:// 只允许 localhost / 127.0.0.1 / 10.0.2.2 以及 10./172.16-31./192.168. 私有网段和 *.local，
+公网 http 一律在发请求前就被拦掉。改动这条策略请改 CleartextGuard，并同步它的单元测试。
+-->
+<network-security-config>
+	<base-config cleartextTrafficPermitted="true">
+		<trust-anchors>
+			<certificates src="system" />
+		</trust-anchors>
+	</base-config>
+</network-security-config>

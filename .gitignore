@@ -1,0 +1,26 @@
+# .gitignore
+# AICP 忽略清单：构建产物、IDE 配置、本机路径配置、签名密钥
+
+*.iml
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本机专属，禁止提交
+local.properties
+
+# IDE
+.idea/
+*.hprof
+
+# 签名与密钥，永远不进仓库
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

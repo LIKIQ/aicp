@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/values/colors.xml
+仅放 XML 侧需要的颜色（启动窗口背景、图标底色）。
+Compose 里的配色在 ui/theme/Color.kt，两边不共用，不要互相引用。
+-->
+<resources>
+	<color name="aicp_window_background">#FFFBFE</color>
+	<color name="ic_launcher_background">#1B1233</color>
+</resources>

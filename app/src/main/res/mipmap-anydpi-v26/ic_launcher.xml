@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+自适应图标。minSdk 26 起 adaptive-icon 全设备可用，所以不需要各密度的 png。
+
+关于目录名：lint 的 ObsoleteSdkInt 会建议去掉 -v26（因为 minSdk 就是 26），
+但实测把目录改成 mipmap-anydpi 之后 mergeDebugResources 不再产出这个资源，
+aapt2 直接报 "resource mipmap/ic_launcher not found"，clean 重建同样复现。
+所以这里保留 -v26，并在 app/lint.xml 里关掉那条规则。
+
+monochrome 是 Android 13 主题图标用的；低版本解析 adaptive-icon 时会忽略这个未知子标签。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+	<background android:drawable="@color/ic_launcher_background" />
+	<foreground android:drawable="@drawable/ic_launcher_foreground" />
+	<monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

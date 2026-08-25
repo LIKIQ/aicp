@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/drawable/ic_tab_persona.xml
+底部 tab「性格」图标：一张笑脸（外环 + 两眼 + 嘴）
+用 evenOdd 让外环中空，避免脸盘把五官盖住
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="24dp"
+	android:height="24dp"
+	android:viewportWidth="24"
+	android:viewportHeight="24">
+	<!-- 外环 -->
+	<path
+		android:fillColor="@android:color/white"
+		android:fillType="evenOdd"
+		android:pathData="M2,12 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 Z M4,12 a8,8 0 1,1 16,0 a8,8 0 1,1 -16,0 Z" />
+	<!-- 左右眼 -->
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M7.5,10 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0 Z" />
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M13.5,10 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0 Z" />
+	<!-- 嘴：一段下弯的月牙 -->
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M7,14 Q12,18.5 17,14 Q12,16.2 7,14 Z" />
+</vector>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/values/strings.xml
+AICP 文案表（简体中文为默认语言）
+-->
+<resources>
+	<string name="app_name">AICP</string>
+
+	<!-- 底部导航 -->
+	<string name="nav_chats">会话</string>
+	<string name="nav_personas">性格</string>
+	<string name="nav_settings">设置</string>
+
+	<!-- 后台主动搭话的通知渠道 -->
+	<string name="proactive_channel_name">主动消息</string>
+	<string name="proactive_channel_desc">很久没聊时，AI 主动发来的消息</string>
+</resources>

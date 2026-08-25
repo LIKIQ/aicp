@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/res/drawable/ic_tab_chat.xml
+底部 tab「会话」图标：对话气泡，跟启动图标同一套造型
+自绘而不用 material-icons：icons-core 里没有 Chat，引 material-icons-extended 又要多背一个大包
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="24dp"
+	android:height="24dp"
+	android:viewportWidth="24"
+	android:viewportHeight="24">
+	<path
+		android:fillColor="@android:color/white"
+		android:pathData="M4,3 H20 A2,2 0 0 1 22,5 V15 A2,2 0 0 1 20,17 H9 L4,21 V17 A2,2 0 0 1 2,15 V5 A2,2 0 0 1 4,3 Z" />
+</vector>

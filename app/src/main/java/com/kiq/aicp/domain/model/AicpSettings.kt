@@ -1,0 +1,162 @@
+// app/src/main/java/com/kiq/aicp/domain/model/AicpSettings.kt
+// 全局设置的领域模型。默认值就是"开箱能用"的那套参数，改这里等于改产品默认行为。
+//
+// apiKey 在这个对象里是解密后的明文（发请求必须用明文），所以：
+// - toString 一律脱敏，防止随手 log 一下就把 Key 打进日志
+// - 这个对象不落盘、不进 Bundle、不往外传
+
+package com.kiq.aicp.domain.model
+
+import com.kiq.aicp.domain.humanize.HumanizeConfig
+import com.kiq.aicp.domain.sticker.StickerParser
+
+data class AicpSettings(
+	val baseUrl: String = "",
+	val apiKey: String = "",
+	val model: String = "",
+
+	/** 压缩专用模型，留空表示跟随 model。用便宜模型做摘要能省不少钱 */
+	val compressModel: String = "",
+
+	/**
+	 * 视觉专用模型，留空表示跟随 model。
+	 * 必须能单独配：很多服务的主力模型根本不认图（DeepSeek 只有带 -vision- 的那个实验模型支持），
+	 * 拿主模型传图会直接 400。
+	 */
+	val visionModel: String = "",
+
+	/**
+	 * 一次请求最多带几张历史图片。视觉 token 贵，而且模型第一次看图后的描述已经留在历史文本里了，
+	 * 把十几张旧图反复送上去纯属烧钱。
+	 */
+	val maxImagesInContext: Int = 2,
+
+	val autoCompressEnabled: Boolean = true,
+
+	/** 一次请求最多塞给模型多少 token（含系统提示词、记忆、历史） */
+	val contextBudgetTokens: Int = 6000,
+
+	/** 无论如何都保留在上下文里的最近消息条数，压缩不动这些 */
+	val keepRecentMessages: Int = 10,
+
+	/** 未压缩区间超过这个 token 数就触发压缩 */
+	val compressTriggerTokens: Int = 3000,
+
+	/** 或者未压缩条数超过这个数也触发 */
+	val compressTriggerCount: Int = 30,
+
+	/** L1 摘要攒到这个数量就合并成一条 L2 */
+	val summaryMergeThreshold: Int = 8,
+
+	/** 每次最多带多少张记忆卡片进上下文 */
+	val memoryCardLimit: Int = 12,
+
+	/** 群聊里一轮最多几个性格开口 */
+	val groupMaxSpeakersPerTurn: Int = 2,
+
+	/**
+	 * 是否让模型知道有表情包可用。
+	 * 默认开，但一张表情都没导入时 promptLabels 返回空，等于自动不生效。
+	 */
+	val stickersEnabled: Boolean = true,
+
+	/**
+	 * 注入 system prompt 的表情标记上限。
+	 * 每个标记连中括号和分隔符大约 4~6 token，40 个约 200 token，
+	 * 在 6000 的预算里可以接受；调到几百个就会明显挤压记忆的位置。
+	 */
+	val stickerPromptLimit: Int = StickerParser.PROMPT_LIMIT,
+
+	/**
+	 * 真人模拟总开关：分段发送、已读延迟、情绪状态都归它管。
+	 * 关掉就完全退回"一次请求一条消息"的老行为，方便对比和排查问题。
+	 */
+	val humanizeEnabled: Boolean = true,
+
+	/** 一条回复最多切成几段 */
+	val humanizeMaxSegments: Int = 3,
+
+	/** 每个字的打字耗时（毫秒），决定段间停顿多久 */
+	val humanizeMsPerChar: Int = 55,
+
+	/** 收到消息后先"看一眼"再开始打字的时长（毫秒） */
+	val humanizeReadDelayMs: Long = 900,
+
+	/**
+	 * 主动搭话总开关。默认关 —— 它会自己发起请求花钱，
+	 * 这种事必须用户明确同意才能开，不能靠默认值替他决定。
+	 */
+	val proactiveEnabled: Boolean = false,
+
+	/** 多久没动静就可以主动搭话（分钟） */
+	val proactiveIdleMinutes: Int = 180,
+
+	/** 后台唤醒推送。比前台那套更花钱，所以单独一个开关 */
+	val proactivePushEnabled: Boolean = false,
+
+	/** 每天最多主动搭话几次 */
+	val proactiveDailyLimit: Int = 3,
+
+	/** 免打扰开始/结束的小时数（0..23）。start > end 表示跨午夜 */
+	val quietHoursStart: Int = 23,
+	val quietHoursEnd: Int = 8,
+
+	val dynamicColor: Boolean = true,
+) {
+
+	val hasEndpoint: Boolean
+		get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
+
+	fun effectiveCompressModel(): String = compressModel.ifBlank { model }
+
+	fun effectiveVisionModel(): String = visionModel.ifBlank { model }
+
+	/** 分段/停顿参数打包给 ReplySegmenter。关掉真人模拟时返回 Disabled */
+	fun humanizeConfig(): HumanizeConfig =
+		if (!humanizeEnabled) {
+			HumanizeConfig.Disabled
+		} else {
+			HumanizeConfig(
+				enabled = true,
+				maxSegments = humanizeMaxSegments,
+				msPerChar = humanizeMsPerChar,
+				readDelayMs = humanizeReadDelayMs,
+			)
+		}
+
+	/** 某个时刻是否落在免打扰时段内。start==end 视为全天免打扰 */
+	fun isQuietAt(hour: Int): Boolean {
+		val h = hour.coerceIn(0, 23)
+		return if (quietHoursStart <= quietHoursEnd) {
+			h in quietHoursStart until quietHoursEnd
+		} else {
+			// 跨午夜：23 点到次日 8 点
+			h >= quietHoursStart || h < quietHoursEnd
+		}
+	}
+
+	val hasVisionModel: Boolean
+		get() = visionModel.isNotBlank() || model.isNotBlank()
+
+	override fun toString(): String =
+		"AicpSettings(baseUrl=$baseUrl, apiKey=${maskKey(apiKey)}, model=$model, " +
+			"compressModel=$compressModel, visionModel=$visionModel, " +
+			"maxImagesInContext=$maxImagesInContext, autoCompress=$autoCompressEnabled, " +
+			"budget=$contextBudgetTokens, keepRecent=$keepRecentMessages, " +
+			"trigger=${compressTriggerTokens}t/${compressTriggerCount}c, " +
+			"merge=$summaryMergeThreshold, cards=$memoryCardLimit, " +
+			"speakers=$groupMaxSpeakersPerTurn, stickers=$stickersEnabled/$stickerPromptLimit, " +
+			"humanize=$humanizeEnabled/${humanizeMaxSegments}seg/${humanizeMsPerChar}ms, " +
+			"proactive=$proactiveEnabled/push=$proactivePushEnabled/${proactiveIdleMinutes}min/" +
+			"${proactiveDailyLimit}per-day, quiet=$quietHoursStart-$quietHoursEnd, " +
+			"dynamicColor=$dynamicColor)"
+
+	companion object {
+		/** 给日志和 UI 用的脱敏展示 */
+		fun maskKey(key: String): String = when {
+			key.isEmpty() -> "(未设置)"
+			key.length <= 8 -> "*".repeat(key.length)
+			else -> "${key.take(4)}${"*".repeat(6)}${key.takeLast(4)}"
+		}
+	}
+}

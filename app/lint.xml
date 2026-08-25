@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/lint.xml
+只关掉两条"我们有意为之"的规则，其余一律保持默认严格度。
+每一条都写清理由，别让后来的人（包括我自己）以为是随手压下去的。
+-->
+<lint>
+
+	<!--
+	targetSdk 停在 36 而 compileSdk 是 37，是刻意的：
+	36 正好是 Google Play 2026-08-31 起的强制线，先满足合规；
+	Android 17 的行为变更要逐条过完才升 target，而且 Robolectric 4.16.1 是按 targetSdk
+	取 android-all jar 的，停在 36 单测才能跑（37 的 jar 要 4.17 才有）。
+	-->
+	<issue id="OldTargetApi" severity="ignore" />
+
+	<!--
+	network_security_config 的 base-config 确实放开了明文，但这不是疏忽：
+	Android 的 NSC 只认精确域名和精确 IP，写不出 192.168.* 这类网段规则，
+	而 KIQ 明确要求能连局域网自建的 ollama / LM Studio。
+	真正的白名单在 data/remote/CleartextGuard.kt —— http 只放行 localhost、10.0.2.2
+	和 RFC1918 私有网段与 *.local，公网 http 在发请求前就被拒，并有单测覆盖绕过手法
+	（192.168.1.1.evil.com 这种）。改这条策略请改 CleartextGuard 并同步它的测试。
+	-->
+	<issue id="InsecureBaseConfiguration" severity="ignore" />
+
+	<!--
+	ObsoleteSdkInt 会说 mipmap-anydpi-v26 的 -v26 是多余的（minSdk 正好是 26），
+	但实测按它的建议改成 mipmap-anydpi 之后，mergeDebugResources 不再产出这个资源，
+	aapt2 报 "resource mipmap/ic_launcher not found"，clean 重建照样复现。
+	一条提示性警告不值得跟 AGP 的资源合并流程较劲，所以保留 -v26 并关掉这条。
+	-->
+	<issue id="ObsoleteSdkInt" severity="ignore" />
+
+</lint>

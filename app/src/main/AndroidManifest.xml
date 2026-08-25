@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+app/src/main/AndroidManifest.xml
+AICP 应用清单
+职责：
+- 申请网络权限（调用云端 OpenAI 兼容接口）
+- 挂 network_security_config
+- 注册 AicpApplication（持有全局 AppContainer）与唯一入口 MainActivity
+安全取舍：
+- allowBackup=false：聊天记忆与加密后的 API Key 不进系统云备份，避免数据出设备。
+  需要备份时走应用内导出功能，不依赖 Google Backup。
+- 不申请存储/位置/通讯录/相机权限，全部数据只落应用私有目录
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+	<uses-permission android:name="android.permission.INTERNET" />
+	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+	<!-- 后台主动搭话推送；Android 13+ 运行时还要在设置里开 POST_NOTIFICATIONS，这里先声明 -->
+	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+	<application
+		android:name=".AicpApplication"
+		android:allowBackup="false"
+		android:dataExtractionRules="@xml/data_extraction_rules"
+		android:icon="@mipmap/ic_launcher"
+		android:label="@string/app_name"
+		android:networkSecurityConfig="@xml/network_security_config"
+		android:supportsRtl="true"
+		android:theme="@style/Theme.Aicp">
+
+		<activity
+			android:name=".MainActivity"
+			android:exported="true"
+			android:theme="@style/Theme.Aicp"
+			android:windowSoftInputMode="adjustResize">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+	</application>
+
+</manifest>
