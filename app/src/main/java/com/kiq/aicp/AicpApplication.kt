@@ -90,6 +90,8 @@ class AicpApplication : Application() {
 	 * 用户把内置表情删干净之后，按后者判断的话每次重启都会重新冒出来。
 	 */
 	private suspend fun importBuiltInStickersOnce() {
+		importPresetEmojiStickers()
+
 		if (container.settingsStore.builtInStickersImported()) return
 		val count = container.builtInStickers.importIfNeeded()
 		// assets 里没放素材时 count 是 0，这时候也标记成已处理：
@@ -102,6 +104,20 @@ class AicpApplication : Application() {
 			runCatching { container.scheduleStickerVision() }
 				.onFailure { Log.e(TAG, "内置表情识图排程失败", it) }
 		}
+	}
+
+	/**
+	 * 预设 emoji 表情。
+	 *
+	 * 跟 assets 那套分开跑，而且不排识图 —— 它的分组名本身就是情绪词，
+	 * 装上就能被模型选中，没有待分类的图，排识图纯属白跑一趟视觉调用。
+	 * 版本号判据在 importIfNeeded 里面，这里不重复判。
+	 */
+	private suspend fun importPresetEmojiStickers() {
+		val count = runCatching { container.builtInEmojiStickers.importIfNeeded() }
+			.onFailure { Log.e(TAG, "预设 emoji 表情导入失败", it) }
+			.getOrDefault(0)
+		if (count > 0) Log.i(TAG, "预设 emoji 表情导入 $count 张")
 	}
 
 	/**

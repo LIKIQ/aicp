@@ -100,6 +100,20 @@ class SettingsStore(
 	}
 
 	/**
+	 * 内置 emoji 表情灌到第几版了。
+	 *
+	 * 用版本号而不是布尔：以后往预设里补表情时，老用户的标记已经置位，
+	 * 布尔的话他们永远拿不到新增那批。比较版本号就能只补差量。
+	 * 跟 assets 那套内置素材分开记，两者来源不同、可以各自演进。
+	 */
+	suspend fun builtInEmojiVersion(): Int =
+		dataStore.data.first()[KEY_BUILTIN_EMOJI_VERSION] ?: 0
+
+	suspend fun markBuiltInEmojiVersion(version: Int) {
+		dataStore.edit { it[KEY_BUILTIN_EMOJI_VERSION] = version }
+	}
+
+	/**
 	 * 待恢复标记。阶段一解压完置上，阶段二把文件搬完之后由 AicpApplication 清掉。
 	 *
 	 * 它只负责设置页那句"等重启"，不是恢复流程的判据 —— 真正决定要不要搬文件的是
@@ -300,6 +314,7 @@ class SettingsStore(
 		private val KEY_STICKERS_ENABLED = booleanPreferencesKey("stickers_enabled")
 		private val KEY_STICKER_LIMIT = intPreferencesKey("sticker_prompt_limit")
 		private val KEY_BUILTIN_STICKERS = booleanPreferencesKey("builtin_stickers_imported")
+		private val KEY_BUILTIN_EMOJI_VERSION = intPreferencesKey("builtin_emoji_version")
 		private val KEY_RESTORE_PENDING = booleanPreferencesKey("restore_pending")
 		private val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_at")
 		private val KEY_HUMANIZE_ENABLED = booleanPreferencesKey("humanize_enabled")

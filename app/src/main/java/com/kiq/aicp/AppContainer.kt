@@ -12,6 +12,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.kiq.aicp.data.attach.AttachmentStore
+import com.kiq.aicp.data.attach.BuiltInEmojiStickers
 import com.kiq.aicp.data.attach.BuiltInStickers
 import com.kiq.aicp.data.attach.TextExtractor
 import com.kiq.aicp.data.backup.BackupManager
@@ -96,6 +97,11 @@ class AppContainer(context: Context) {
 
 	val builtInStickers: BuiltInStickers by lazy {
 		BuiltInStickers(appContext, stickerRepository, attachmentStore)
+	}
+
+	/** 预设 emoji 表情。渲染要用 cacheDir 落临时 PNG，其余不碰 Context */
+	val builtInEmojiStickers: BuiltInEmojiStickers by lazy {
+		BuiltInEmojiStickers(appContext.cacheDir, stickerRepository, settingsStore)
 	}
 
 	val contextBuilder: ContextBuilder by lazy {
