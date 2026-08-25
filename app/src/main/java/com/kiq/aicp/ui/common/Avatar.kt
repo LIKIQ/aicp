@@ -39,8 +39,8 @@ fun Avatar(
 	imagePath: String?,
 	fallbackName: String,
 	resolveFile: (String) -> File,
-	size: Dp = 40.dp,
 	modifier: Modifier = Modifier,
+	size: Dp = 40.dp,
 	background: Color = MaterialTheme.colorScheme.secondaryContainer,
 ) {
 	Box(

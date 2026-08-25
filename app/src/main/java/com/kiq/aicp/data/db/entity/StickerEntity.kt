@@ -53,5 +53,13 @@ data class StickerEntity(
 	/** 被发出去过几次。注入 system prompt 时按这个降序挑，常用的优先让模型看见 */
 	val useCount: Int = 0,
 
+	/**
+	 * 识图识出来的情绪，取值限定在 StickerEmotion.ALL 内，空串表示还没识别。
+	 *
+	 * 只有"分组名本身不是情绪"的那些组才需要它：分组叫「开心」时整组共用组名当情绪，
+	 * 一张图一次视觉调用是真金白银，能靠组名省下来就别去调。
+	 */
+	val emotion: String = "",
+
 	val createdAt: Long,
 )

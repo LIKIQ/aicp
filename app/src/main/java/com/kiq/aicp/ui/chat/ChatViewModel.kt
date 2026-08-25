@@ -55,6 +55,7 @@ import com.kiq.aicp.domain.humanize.MoodTracker
 import com.kiq.aicp.domain.humanize.ProactiveContext
 import com.kiq.aicp.domain.humanize.ProactiveDecider
 import com.kiq.aicp.domain.humanize.ReplySegmenter
+import com.kiq.aicp.domain.sticker.StickerGroupResolver
 import com.kiq.aicp.domain.sticker.StickerParser
 import java.io.File
 import java.time.LocalTime
@@ -595,6 +596,10 @@ class ChatViewModel(
 		val messageId = chatRepository.startAssistant(conversationId, persona.id)
 		transient.update { it.copy(streamingMessageId = messageId, streamingText = "") }
 
+		// 提示词里给模型的是情绪清单，所以这一轮要拿同一份清单把它写的 [情绪] 换回具体某张图。
+		// 一轮之内清单不会变，取一次就够
+		val emotions = availableEmotions(settings)
+
 		val buffer = StringBuilder()
 		var pendingChars = 0
 		var lastFlushAt = 0L
@@ -627,6 +632,9 @@ class ChatViewModel(
 				when (chunk) {
 					is LlmChunk.Delta -> {
 						buffer.append(chunk.text)
+						// 换图要赶在文本定型之前：这段文字既要落库、也会进下一轮上下文，
+						// 留到渲染时再挑图，同一条消息每次重组都会换一张脸
+						resolveEmotionMarkers(buffer, emotions)
 						transient.update { it.copy(streamingText = buffer.toString()) }
 
 						pendingChars += chunk.text.length
@@ -798,6 +806,61 @@ class ChatViewModel(
 		val known = uiState.value.stickerIndex.keys
 		if (known.isEmpty()) return
 		runCatching { stickerRepository.bumpUsage(StickerParser.labelsIn(reply, known)) }
+	}
+
+	/**
+	 * 这一轮模型能用的情绪。走的是提示词那条同一个方法和同一个上限，
+	 * 两边不一致的话模型写出来的情绪会有一部分换不掉，直接以文字形式露在气泡里。
+	 */
+	private suspend fun availableEmotions(settings: AicpSettings): Set<String> {
+		if (!settings.stickersEnabled) return emptySet()
+		return try {
+			stickerRepository.promptEmotions(settings.stickerPromptLimit).toSet()
+		} catch (e: kotlinx.coroutines.CancellationException) {
+			throw e
+		} catch (e: Exception) {
+			Log.w(TAG, "情绪清单没取到，这轮就不换表情了", e)
+			emptySet()
+		}
+	}
+
+	/**
+	 * 把累积文本里的 [情绪] 就地换成具体某张表情的标记。
+	 *
+	 * 挑图要查库（suspend）而 resolve 是纯函数，所以顺序固定是
+	 * "先问这段里有哪些情绪 → 逐个取好图 → 再一次性同步替换"。
+	 * 换过的部分已经是具体标记，下一个增量进来时不会被再动一次，
+	 * 这个幂等性由 resolve 自己保证，这里不需要额外缓存。
+	 */
+	private suspend fun resolveEmotionMarkers(buffer: StringBuilder, emotions: Set<String>) {
+		if (emotions.isEmpty()) return
+
+		val known = uiState.value.stickerIndex.keys
+		val text = buffer.toString()
+		val pending = StickerGroupResolver.emotionsIn(text, emotions, known)
+		if (pending.isEmpty()) return
+
+		val picked = mutableMapOf<String, String>()
+		pending.forEach { emotion ->
+			pickLabelFor(emotion)?.let { picked[emotion] = it }
+		}
+		if (picked.isEmpty()) return
+
+		val resolved = StickerGroupResolver.resolve(text, emotions, known) { picked[it] }
+		if (resolved != text) {
+			buffer.setLength(0)
+			buffer.append(resolved)
+		}
+	}
+
+	/** 挑图失败不该让整条回复变成失败：[情绪] 原样留着最多是多一行文字，崩掉是整段没了 */
+	private suspend fun pickLabelFor(emotion: String): String? = try {
+		stickerRepository.pickForEmotion(emotion)
+	} catch (e: kotlinx.coroutines.CancellationException) {
+		throw e
+	} catch (e: Exception) {
+		Log.w(TAG, "情绪 $emotion 没挑到表情", e)
+		null
 	}
 
 	private fun describeError(e: Exception): String = when {

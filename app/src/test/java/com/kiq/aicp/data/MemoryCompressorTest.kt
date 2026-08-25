@@ -118,13 +118,13 @@ class MemoryCompressorTest {
 	}
 
 	@Test
-	fun `达到条数阈值后落摘要 卡片 并推进游标`() = runTest {
+	fun `达到条数阈值后落摘要 条目 并推进游标`() = runTest {
 		val (convId, personaId) = newConversation()
 		sendRounds(convId, personaId, rounds = 4)
 		llm.scriptedReplies = mutableListOf(
-			FakeLlmProvider.compressionJson(
+			FakeLlmProvider.wikiIngestJson(
 				summary = "用户连着问了几个问题，情绪平稳。",
-				cards = listOf(Triple("FACT", "职业", "在做安卓开发")),
+				entries = listOf(Triple("FACT", "职业", "在做安卓开发")),
 			),
 		)
 
@@ -138,6 +138,12 @@ class MemoryCompressorTest {
 		val summary = memory.activeSummaries(convId, level = 1).single()
 		assertEquals("用户连着问了几个问题，情绪平稳。", summary.content)
 		assertFalse(summary.needsSemanticRedo)
+
+		// 条目该落进去了，正文就是模型给的那段
+		val entry = memory.observeAllEntries().first().single()
+		assertEquals("职业", entry.title)
+		assertEquals("在做安卓开发", entry.body)
+		assertEquals(1, entry.sourceCount)
 
 		val conv = conversations.getById(convId)!!
 		assertEquals(summary.toMessageId, conv.compressedUntilMessageId)
@@ -291,13 +297,13 @@ class MemoryCompressorTest {
 	}
 
 	@Test
-	fun `卡片作用域按类型分流`() = runTest {
+	fun `条目作用域按分类分流`() = runTest {
 		val (convId, personaId) = newConversation()
 		sendRounds(convId, personaId, rounds = 4)
 		llm.scriptedReplies = mutableListOf(
-			FakeLlmProvider.compressionJson(
+			FakeLlmProvider.wikiIngestJson(
 				summary = "摘要",
-				cards = listOf(
+				entries = listOf(
 					Triple("FACT", "职业", "安卓开发"),
 					Triple("RELATION", "称呼", "叫他 KIQ"),
 					Triple("EVENT", "本次", "改了压缩逻辑"),
@@ -308,7 +314,7 @@ class MemoryCompressorTest {
 
 		compressor.compressIfNeeded(convId, settings)
 
-		val scopes = memory.observeAllCards().first().associate { it.keyword to it.scopeKey }
+		val scopes = memory.observeAllEntries().first().associate { it.title to it.scopeKey }
 		assertEquals("c:-|p:-", scopes["职业"])
 		assertEquals("c:-|p:-", scopes["称呼"])
 		assertEquals("c:$convId|p:-", scopes["本次"])
@@ -316,18 +322,18 @@ class MemoryCompressorTest {
 	}
 
 	@Test
-	fun `群聊里的印象卡退化成会话级`() = runTest {
+	fun `群聊里的印象条目退化成会话级`() = runTest {
 		personas.ensureSeeded()
 		val ids = personas.observeAll().first().map { it.id }
 		val convId = conversations.createGroup(listOf(ids[0], ids[1]))
 		sendRounds(convId, ids[0], rounds = 4)
 		llm.scriptedReplies = mutableListOf(
-			FakeLlmProvider.compressionJson("摘要", listOf(Triple("IMPRESSION", "印象", "很较真"))),
+			FakeLlmProvider.wikiIngestJson("摘要", listOf(Triple("IMPRESSION", "印象", "很较真"))),
 		)
 
 		compressor.compressIfNeeded(convId, settings)
 
-		assertEquals("c:$convId|p:-", memory.observeAllCards().first().single().scopeKey)
+		assertEquals("c:$convId|p:-", memory.observeAllEntries().first().single().scopeKey)
 	}
 
 	@Test

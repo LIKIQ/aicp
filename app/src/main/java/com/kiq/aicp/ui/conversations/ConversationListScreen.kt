@@ -300,7 +300,7 @@ private fun ConversationCard(
 
 			Box {
 				// 换成 IconButton + 竖三点，跟聊天页顶栏的更多菜单是同一个图标；
-				// 原来的 TextButton("…") 有 64dp 最小宽度，把标题区往里挤了一截
+				// 原来的 TextButton("…") 带着按钮的最小宽度，把标题区往里挤了一截
 				IconButton(onClick = { menuOpen = true }) {
 					Icon(painterResource(R.drawable.ic_more), contentDescription = "更多操作")
 				}

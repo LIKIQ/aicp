@@ -1,19 +1,23 @@
 // app/src/main/java/com/kiq/aicp/AicpApplication.kt
-// 应用入口：建全局依赖容器，并在后台把内置性格灌进空库。
+// 应用入口：先处理待恢复的备份，再建全局依赖容器，并在后台把内置性格灌进空库。
 //
 // 种子灌入放在 applicationScope 而不是 onCreate 主线程：它要开库、写四行，
 // 放主线程会实打实拖慢冷启动，而首页拿到数据是靠 Flow 推的，晚几十毫秒无感。
+//
+// 备份恢复反过来 —— 必须同步、必须在容器之前，理由写在 onCreate 里那段注释。
 
 package com.kiq.aicp
 
 import android.app.Application
 import android.util.Log
+import com.kiq.aicp.data.backup.BackupManager
 import com.kiq.aicp.work.ProactiveWorker
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -33,6 +37,15 @@ class AicpApplication : Application() {
 	override fun onCreate() {
 		super.onCreate()
 		instance = this
+
+		// 待恢复的备份必须在这一行搬完，位置和同步性都不能挪：
+		// AppContainer 里的 database 是 by lazy，谁先碰它谁就先把 Room 连接开起来了，
+		// 那之后再换库文件就是"连接握着旧页、磁盘上是新文件"，轻则读到半旧半新，重则写坏新库。
+		// 扔进 applicationScope 也不行 —— 协程调度上去的那一刻主线程已经往下跑了。
+		// 代价是刚点过恢复的那一次冷启动会被阻塞几十到几百毫秒；没有待恢复标记时它只做一次
+		// 目录 stat 就返回。用一次可感知的启动卡顿换"要么完整恢复、要么原样不动"，这笔账划得来。
+		BackupManager.applyPendingRestore(this)
+
 		container = AppContainer(this)
 
 		applicationScope.launch {
@@ -45,7 +58,30 @@ class AicpApplication : Application() {
 				.onFailure { Log.e(TAG, "灌入内置表情失败", it) }
 		}
 
+		applicationScope.launch {
+			runCatching { settleRestoreFlag() }
+				.onFailure { Log.e(TAG, "清理待恢复标记失败", it) }
+		}
+
 		observeProactiveSchedule()
+
+		// 补跑一次表情识图：上次可能导入完就被杀进程了，或者当时没网。
+		// 没有待识别的图时 Worker 查一次库就退出，代价可以忽略，所以无条件排
+		runCatching { container.scheduleStickerVision() }
+			.onFailure { Log.e(TAG, "表情识图排程失败", it) }
+	}
+
+	/**
+	 * 把 DataStore 里的待恢复标记跟磁盘上的实际情况对齐。
+	 *
+	 * 标记是给设置页看的"等重启"状态，搬运本身却发生在 DataStore 还用不上的时候（见上面 onCreate），
+	 * 所以只能等容器起来之后补这一刀：暂存目录已经没了就说明这轮搬运已经收尾（成功或已回滚），
+	 * 标记该落下去，否则那句"重启后完成恢复"会一直挂在设置页上骗人。
+	 */
+	private suspend fun settleRestoreFlag() {
+		if (!container.settingsStore.restorePending.first()) return
+		if (BackupManager.hasPendingRestore(this)) return
+		container.settingsStore.setRestorePending(false)
 	}
 
 	/**
@@ -59,7 +95,13 @@ class AicpApplication : Application() {
 		// assets 里没放素材时 count 是 0，这时候也标记成已处理：
 		// 否则每次冷启动都要白跑一遍 assets 列目录
 		container.settingsStore.markBuiltInStickersImported()
-		if (count > 0) Log.i(TAG, "内置表情导入 $count 张")
+		if (count > 0) {
+			Log.i(TAG, "内置表情导入 $count 张")
+			// 刚灌进来的图还没有情绪，赶紧排一次识图。
+			// onCreate 里那次排程发生在这个协程之前，可能已经把空批次跑完了
+			runCatching { container.scheduleStickerVision() }
+				.onFailure { Log.e(TAG, "内置表情识图排程失败", it) }
+		}
 	}
 
 	/**

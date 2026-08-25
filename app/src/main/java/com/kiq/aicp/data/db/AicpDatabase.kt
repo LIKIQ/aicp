@@ -1,10 +1,12 @@
 // app/src/main/java/com/kiq/aicp/data/db/AicpDatabase.kt
 // Room 数据库定义。
 //
-// 十张表分六层：
+// 十二张表分六层：
 //   personas / conversations / conversation_personas —— 配置与关系
-//   messages / message_attachments                   —— L0 原文与附件，永不因压缩而删除
-//   memory_summaries / memory_cards                   —— L1/L2 摘要 与 L3 记忆卡片
+//   messages / message_attachments                   —— L0 原文与附件，永不因压缩而删除（wiki 的 raw sources 层）
+//   memory_summaries                                 —— L1/L2 摘要页
+//   memory_entries / memory_logs                     —— wiki 条目与操作时间线（v6 起的记忆主体）
+//   memory_cards                                     —— v5 及以前的扁平卡片，已冻结成历史归档
 //   sticker_packs / stickers                          —— 用户导入的表情包
 //   proactive_logs                                   —— 主动搭话的调用记录
 //
@@ -30,6 +32,8 @@ import com.kiq.aicp.data.db.dao.StickerDao
 import com.kiq.aicp.data.db.entity.ConversationEntity
 import com.kiq.aicp.data.db.entity.ConversationPersonaCrossRef
 import com.kiq.aicp.data.db.entity.MemoryCardEntity
+import com.kiq.aicp.data.db.entity.MemoryEntryEntity
+import com.kiq.aicp.data.db.entity.MemoryLogEntity
 import com.kiq.aicp.data.db.entity.MemorySummaryEntity
 import com.kiq.aicp.data.db.entity.MessageAttachmentEntity
 import com.kiq.aicp.data.db.entity.MessageEntity
@@ -37,6 +41,16 @@ import com.kiq.aicp.data.db.entity.PersonaEntity
 import com.kiq.aicp.data.db.entity.ProactiveLogEntity
 import com.kiq.aicp.data.db.entity.StickerEntity
 import com.kiq.aicp.data.db.entity.StickerPackEntity
+
+/**
+ * 数据库版本号的唯一出处。
+ *
+ * 单独拎成顶层常量是被坑出来的：备份模块原先自己手写了一份"当前 db 版本"，
+ * 库升到 v6 之后那份还留在 5，导出的 manifest 就开始撒谎——
+ * 标着 v5 的备份里装着 v6 的库文件，恢复时的版本校验形同虚设。
+ * 以后升版本只改这一个数。
+ */
+const val AICP_DB_VERSION = 7
 
 @Database(
 	entities = [
@@ -47,11 +61,13 @@ import com.kiq.aicp.data.db.entity.StickerPackEntity
 		MessageAttachmentEntity::class,
 		MemorySummaryEntity::class,
 		MemoryCardEntity::class,
+		MemoryEntryEntity::class,
+		MemoryLogEntity::class,
 		StickerPackEntity::class,
 		StickerEntity::class,
 		ProactiveLogEntity::class,
 	],
-	version = 5,
+	version = AICP_DB_VERSION,
 	exportSchema = true,
 )
 @TypeConverters(Converters::class)

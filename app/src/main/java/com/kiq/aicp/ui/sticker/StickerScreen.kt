@@ -1,5 +1,13 @@
 // app/src/main/java/com/kiq/aicp/ui/sticker/StickerScreen.kt
-// 表情包管理页：分组、导入、改标记、移到别的组、删除。
+// 表情包管理页：分组、导入、看/改情绪、改标记、移到别的组、删除。
+//
+// 这一页的主角是情绪，不是标记。模型手上只有一份情绪清单 —— 它写 [开心]，代码再从开心的那些图
+// 里随机挑一张换进去，单张图的标记它根本看不到。所以分组头部和每张卡片都得先回答
+// "这张图在什么情绪下会被发出去"，标记退成第二行的内部标识（只在用户自己手打 [标记] 时还有用）。
+//
+// 情绪的两条来源在分组头部分开讲清楚：组名认得出情绪就整组共用它，一张图都不用识；
+// 认不出（「我的收藏」这种）才靠后台识图逐张标。识图是 WorkManager 自动排队的，
+// 所以这页刻意不放"开始识别"按钮 —— 摆个按钮用户就会以为不点就不跑，白多一件要操心的事。
 //
 // 网格没用 LazyVerticalGrid。整页是一个 LazyColumn，组内表情 chunked 成每行四个再交给
 // items 铺出来：垂直 LazyColumn 里嵌垂直 LazyVerticalGrid 会直接抛"无限高度约束"，
@@ -7,10 +15,13 @@
 //
 // 空状态的文案写得比别的页面啰嗦，是因为这里最容易被误解：
 // APK 里一张预置表情都没有（那些图有版权，不敢打包进来），必须说清"要自己从相册导入"，
-// 以及"标记就是 AI 回复里写的 [标记]"这层因果 —— 不然用户根本不知道导进来能干什么。
+// 以及"分组名写成情绪词就不用等识图"这层因果 —— 不然用户根本不知道导进来能干什么。
 //
 // 动图只会画出第一帧：缩略图走 BitmapFactory，管理页认得出是哪张就够了，
 // 真正发到聊天里也是同一套渲染，这一点跟 KIQ 确认过可以接受。
+//
+// 空状态借的是 ui.settings 里那个共用 EmptyState，三页的"还没有内容"这才长得一样；
+// 这页要摆两个按钮加一行小字，所以走它的 actions 槽。顶部那段机制说明同理复用 SectionCard。
 
 package com.kiq.aicp.ui.sticker
 
@@ -22,12 +33,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +54,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,11 +85,21 @@ import com.kiq.aicp.R
 import com.kiq.aicp.data.db.entity.StickerEntity
 import com.kiq.aicp.data.db.entity.StickerPackEntity
 import com.kiq.aicp.data.repo.StickerRepository
+import com.kiq.aicp.domain.sticker.StickerEmotion
 import com.kiq.aicp.ui.chat.rememberLocalImage
+import com.kiq.aicp.ui.settings.EmptyState
+import com.kiq.aicp.ui.settings.SectionCard
+import com.kiq.aicp.ui.theme.Dimens
 import java.io.File
 
 /** 每行四张：手机宽度下再多字就挤到看不清标记了 */
 private const val GRID_COLUMNS = 4
+
+/** 跟会话列表同一个值，理由见 ConversationListScreen */
+private val FabClearance = 88.dp
+
+/** 单行输入框走胶囊圆角 */
+private val PillShape = RoundedCornerShape(Dimens.radiusPill)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +121,7 @@ fun StickerScreen(
 	var acting by remember { mutableStateOf<StickerEntity?>(null) }
 	var renamingSticker by remember { mutableStateOf<StickerEntity?>(null) }
 	var movingSticker by remember { mutableStateOf<StickerEntity?>(null) }
+	var pickingEmotion by remember { mutableStateOf<StickerEntity?>(null) }
 
 	// OpenMultipleDocuments 不要任何存储权限，回调里拿到的 uri 当场读盘拷走。
 	// importTarget 是 State，回调执行时读到的是最新值，所以点哪个组的"导入"就进哪个组。
@@ -140,6 +166,7 @@ fun StickerScreen(
 		floatingActionButton = {
 			// 一张表情都没有时不摆 FAB：那种状态下引导区里的大按钮才是主角
 			if (!state.noStickers) {
+				// 不带 icon 槽的重载，跟另外两个 FAB 一致（理由见 ConversationListScreen）
 				ExtendedFloatingActionButton(
 					onClick = {
 						if (state.groups.size > 1) {
@@ -148,9 +175,9 @@ fun StickerScreen(
 							startImport(state.groups.firstOrNull()?.pack?.id)
 						}
 					},
-					text = { Text(if (state.importing) "正在导入…" else "导入表情") },
-					icon = {},
-				)
+				) {
+					Text(if (state.importing) "正在导入…" else "导入表情")
+				}
 			}
 		},
 	) { innerPadding ->
@@ -169,17 +196,36 @@ fun StickerScreen(
 			modifier = Modifier
 				.fillMaxSize()
 				.padding(innerPadding),
-			contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 88.dp),
-			verticalArrangement = Arrangement.spacedBy(8.dp),
+			contentPadding = PaddingValues(
+				start = Dimens.screenPadding,
+				end = Dimens.screenPadding,
+				top = Dimens.screenPadding,
+				bottom = FabClearance,
+			),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 		) {
+			// 机制说明摆在列表里而不是顶栏下方固定住：它是"看一次就懂"的东西，
+			// 跟着内容滚走正好，钉在屏幕上只会一直占掉一块地方
+			item(key = "how-it-works") {
+				MechanismNote(
+					unclassifiedTotal = state.unclassifiedTotal,
+					visionReady = state.visionReady,
+				)
+			}
+
 			state.groups.forEachIndexed { index, group ->
 				if (index > 0) {
-					item(key = "divider-${group.pack.id}") { HorizontalDivider() }
+					// 分割线自己再顶开 spaceXs，加上上下两侧的 spaceSm，组与组之间就攒到 spaceXl 那一档。
+					// 分区之间要的就是这点呼吸感，光靠一条 1dp 的线是隔不开的
+					item(key = "divider-${group.pack.id}") {
+						HorizontalDivider(modifier = Modifier.padding(vertical = Dimens.spaceXs))
+					}
 				}
 
 				item(key = "pack-${group.pack.id}") {
 					PackHeader(
 						group = group,
+						visionReady = state.visionReady,
 						collapsed = group.pack.id in collapsed,
 						onToggle = {
 							val id = group.pack.id
@@ -204,6 +250,7 @@ fun StickerScreen(
 					) { row ->
 						StickerRow(
 							row = row,
+							group = group,
 							resolveFile = viewModel::resolveFile,
 							onClick = { acting = it },
 						)
@@ -218,7 +265,8 @@ fun StickerScreen(
 			title = "新建分组",
 			fieldLabel = "分组名",
 			initial = "",
-			hint = "只是给自己看的归类，比如「熊猫头」「猫猫虫」",
+			hint = "组名直接写情绪词最省事：开心、无语、点赞……整组都按它发，一张图都不用识别。" +
+				"写「熊猫头」这类归类名也行，组里的图交给后台看图分类。",
 			onDismiss = { creatingPack = false },
 			onConfirm = viewModel::createPack,
 		)
@@ -229,7 +277,8 @@ fun StickerScreen(
 			title = "重命名分组",
 			fieldLabel = "分组名",
 			initial = pack.name,
-			hint = null,
+			hint = "改成情绪词之后整组都按这个情绪发，组里每张图自己识别出的情绪就不再起作用 —— " +
+				"组名说话更大声。改回别的名字，又会退回按图片内容各算各的。",
 			onDismiss = { renamingPack = null },
 			onConfirm = { viewModel.renamePack(pack, it) },
 		)
@@ -276,10 +325,21 @@ fun StickerScreen(
 		)
 	}
 
-	acting?.let { sticker ->
+	acting?.let { snapshot ->
+		// 表情和所在分组都从最新的 state 里现找，而不是跟着点击存快照：
+		// 对话框开着的时候后台识图可能刚把 emotion 写回来，组名也可能刚被改成情绪词，
+		// 挂着旧值就会出现"弹窗说待分类、底下卡片已经写着开心"
+		val group = state.groups.firstOrNull { it.pack.id == snapshot.packId }
+		val sticker = group?.stickers?.firstOrNull { it.id == snapshot.id } ?: snapshot
+
 		StickerActionDialog(
 			sticker = sticker,
+			group = group,
 			canMove = state.groups.size > 1,
+			onPickEmotion = {
+				acting = null
+				pickingEmotion = sticker
+			},
 			onRename = {
 				acting = null
 				renamingSticker = sticker
@@ -296,13 +356,28 @@ fun StickerScreen(
 		)
 	}
 
+	pickingEmotion?.let { snapshot ->
+		val group = state.groups.firstOrNull { it.pack.id == snapshot.packId }
+		val sticker = group?.stickers?.firstOrNull { it.id == snapshot.id } ?: snapshot
+
+		EmotionPickerDialog(
+			sticker = sticker,
+			packEmotion = group?.packEmotion,
+			onPick = { emotion ->
+				pickingEmotion = null
+				viewModel.setEmotion(sticker, emotion)
+			},
+			onDismiss = { pickingEmotion = null },
+		)
+	}
+
 	renamingSticker?.let { sticker ->
 		NameDialog(
 			title = "改标记",
 			fieldLabel = "标记",
 			initial = sticker.label,
-			hint = "AI 回复里写 [标记] 就会换成这张图，你在输入框里这么写也一样。" +
-				"标记全局唯一，跟别的表情撞名会有提示。",
+			hint = "标记是给你自己用的内部名字，AI 看不到它 —— 它挑表情看的是情绪。" +
+				"你在输入框里手打 [标记] 还是会换成这张图。标记全局唯一，跟别的表情撞名会有提示。",
 			onDismiss = { renamingSticker = null },
 			onConfirm = { viewModel.renameSticker(sticker, it) },
 		)
@@ -322,9 +397,17 @@ fun StickerScreen(
 	}
 }
 
+/**
+ * 分组头部。
+ *
+ * 除了名字和张数，这里还得回答"这组图模型会在什么情绪下发"：
+ * 组名认得出情绪就整组共用它（不识图），认不出就按图片内容各算各的。
+ * 这行信息比张数重要，所以给情绪加了底色、张数压到最小号。
+ */
 @Composable
 private fun PackHeader(
 	group: StickerPackGroup,
+	visionReady: Boolean,
 	collapsed: Boolean,
 	onToggle: () -> Unit,
 	onImport: () -> Unit,
@@ -336,22 +419,57 @@ private fun PackHeader(
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
+			.heightIn(min = Dimens.touchTargetMin)
 			.clickable(onClick = onToggle),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Column(modifier = Modifier.weight(1f)) {
+		Column(
+			modifier = Modifier.weight(1f),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
+		) {
 			Text(group.pack.name, style = MaterialTheme.typography.titleMedium)
+
+			Row(
+				horizontalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				group.packEmotion?.let { EmotionChip(emotion = it) }
+				Text(
+					packEmotionLine(group, visionReady),
+					style = MaterialTheme.typography.labelSmall,
+					color = if (group.unclassifiedCount > 0 && !visionReady) {
+						MaterialTheme.colorScheme.error
+					} else {
+						MaterialTheme.colorScheme.outline
+					},
+					modifier = Modifier.weight(1f),
+				)
+			}
+
 			Text(
 				"${group.stickers.size} 张" + if (collapsed) " · 已折叠，点一下展开" else "",
 				style = MaterialTheme.typography.labelSmall,
 				color = MaterialTheme.colorScheme.outline,
 			)
+
+			// 组名一改成情绪词，组内那些识别过的情绪就静悄悄失效了。
+			// 不说一句的话用户只会觉得"我明明标过开心，怎么不算了"
+			if (group.shadowedCount > 0) {
+				Text(
+					"组里 ${group.shadowedCount} 张之前识别成了别的情绪，现在一律按组名「${group.packEmotion}」发",
+					style = MaterialTheme.typography.labelSmall,
+					color = MaterialTheme.colorScheme.outline,
+				)
+			}
 		}
 
 		TextButton(onClick = onImport) { Text("导入") }
 
 		Box {
-			TextButton(onClick = { menuOpen = true }) { Text("…") }
+			// 跟会话列表、聊天页顶栏用同一个竖三点，别再留一个文字版的"…"
+			IconButton(onClick = { menuOpen = true }) {
+				Icon(painterResource(R.drawable.ic_more), contentDescription = "分组操作")
+			}
 			DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 				DropdownMenuItem(
 					text = { Text("重命名") },
@@ -372,9 +490,102 @@ private fun PackHeader(
 	}
 }
 
+/**
+ * 分组头部那句情绪归属。
+ *
+ * 待识别的措辞刻意不带任何动作暗示（没有"去识别""点这里"）：识图是 WorkManager 自动排的，
+ * 用户什么都不用做，写成催他的语气反而会让人以为漏了一步。
+ *
+ * 唯一例外是没配视觉模型：那种情况下识图根本跑不起来（Worker 判 notConfigured 就收工，不重试），
+ * 这时候还说"等着就行"就是骗人，得把出路说出来。
+ */
+private fun packEmotionLine(group: StickerPackGroup, visionReady: Boolean): String = when {
+	group.byPackName -> "组名就是情绪，整组共用，不用识图"
+	group.stickers.isEmpty() -> "按图片内容自动分类"
+	group.unclassifiedCount == 0 -> "按图片内容自动分类 · 都分好了"
+	!visionReady -> "按图片内容自动分类 · ${group.unclassifiedCount} 张分不了，还没配能看图的模型"
+	else -> "按图片内容自动分类 · 还有 ${group.unclassifiedCount} 张在后台排队，等着就行"
+}
+
+/**
+ * 情绪徽标。情绪是这一页的主角，给它一块底色才能在缩略图和标记之间一眼扫到；
+ * 还没分类的走弱化配色，视觉上就是"这里暂时空着"，不是错误。
+ */
+@Composable
+private fun EmotionChip(
+	emotion: String?,
+	modifier: Modifier = Modifier,
+) {
+	val known = !emotion.isNullOrBlank()
+	Text(
+		text = if (known) emotion.orEmpty() else "待分类",
+		style = MaterialTheme.typography.labelSmall,
+		color = if (known) {
+			MaterialTheme.colorScheme.onPrimaryContainer
+		} else {
+			MaterialTheme.colorScheme.outline
+		},
+		maxLines = 1,
+		overflow = TextOverflow.Ellipsis,
+		modifier = modifier
+			.clip(RoundedCornerShape(Dimens.radiusSmall))
+			.background(
+				if (known) {
+					MaterialTheme.colorScheme.primaryContainer
+				} else {
+					MaterialTheme.colorScheme.surfaceVariant
+				},
+			)
+			.padding(horizontal = Dimens.spaceSm, vertical = Dimens.spaceXs),
+	)
+}
+
+/**
+ * 顶部机制说明。
+ *
+ * 只讲三件事：模型按情绪挑图、组名写成情绪词最省事、剩下的等后台识别。
+ * 再多就没人读了，具体的坑留给各处 hint 在用户真的要改的时候说。
+ *
+ * 没配视觉模型时那句"等后台"要换成两条出路（配模型 / 把组名改成情绪词），
+ * 否则用户只会看着"待分类"发呆 —— 识图那边判 notConfigured 是直接收工的，不会自己好。
+ */
+@Composable
+private fun MechanismNote(unclassifiedTotal: Int, visionReady: Boolean) {
+	SectionCard(
+		title = "AI 是按情绪挑表情的",
+		subtitle = "它看不到单张图的标记，只拿到一份情绪清单：写下 [开心]，应用就从开心的图里随机挑一张换上去。",
+	) {
+		Text(
+			"分组名直接写成情绪词（${StickerEmotion.ALL.take(3).joinToString("、")}……）最省事，" +
+				"整组共用这个情绪；组名不是情绪词的，后台会自动看图分类，你不用管。",
+			style = MaterialTheme.typography.bodySmall,
+			color = MaterialTheme.colorScheme.outline,
+		)
+		if (unclassifiedTotal > 0) {
+			Text(
+				if (visionReady) {
+					"现在还有 $unclassifiedTotal 张在排队识别，识完会自己显示出来。"
+				} else {
+					"有 $unclassifiedTotal 张等着分类，但设置里还没有能看图的模型，识图跑不起来 —— " +
+						"去配一个，或者把这些图所在的分组名直接改成情绪词。"
+				},
+				style = MaterialTheme.typography.bodySmall,
+				color = if (visionReady) {
+					MaterialTheme.colorScheme.primary
+				} else {
+					MaterialTheme.colorScheme.error
+				},
+			)
+		}
+	}
+}
+
 @Composable
 private fun PackEmptyHint(onImport: () -> Unit) {
-	Row(verticalAlignment = Alignment.CenterVertically) {
+	Row(
+		modifier = Modifier.heightIn(min = Dimens.touchTargetMin),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
 		Text(
 			"这个组还是空的",
 			style = MaterialTheme.typography.bodySmall,
@@ -388,13 +599,16 @@ private fun PackEmptyHint(onImport: () -> Unit) {
 @Composable
 private fun StickerRow(
 	row: List<StickerEntity>,
+	group: StickerPackGroup,
 	resolveFile: (String) -> File,
 	onClick: (StickerEntity) -> Unit,
 ) {
-	Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+	Row(horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm)) {
 		row.forEach { sticker ->
 			StickerCell(
 				sticker = sticker,
+				// 生效的情绪由分组决定（组名是情绪就整组共用），单张自己算不出来
+				emotion = group.effectiveEmotion(sticker),
 				file = resolveFile(sticker.localPath),
 				onClick = { onClick(sticker) },
 				modifier = Modifier.weight(1f),
@@ -408,6 +622,7 @@ private fun StickerRow(
 @Composable
 private fun StickerCell(
 	sticker: StickerEntity,
+	emotion: String?,
 	file: File,
 	onClick: () -> Unit,
 	modifier: Modifier = Modifier,
@@ -423,7 +638,7 @@ private fun StickerCell(
 			modifier = Modifier
 				.fillMaxWidth()
 				.aspectRatio(1f)
-				.clip(RoundedCornerShape(10.dp))
+				.clip(RoundedCornerShape(Dimens.radiusSmall))
 				.background(MaterialTheme.colorScheme.surfaceVariant),
 			contentAlignment = Alignment.Center,
 		) {
@@ -431,22 +646,31 @@ private fun StickerCell(
 			bitmap?.let {
 				Image(
 					bitmap = it,
-					contentDescription = sticker.label,
+					// 读屏用户拿不到缩略图的信息，情绪和标记都念出来才知道点的是哪张
+					contentDescription = "${emotion ?: "待分类"}，标记 ${sticker.label}",
 					contentScale = ContentScale.Fit,
 					modifier = Modifier.fillMaxSize(),
 				)
 			}
 		}
+
+		EmotionChip(emotion = emotion, modifier = Modifier.padding(top = Dimens.spaceXs))
+
+		// 标记退成第二行的弱化小字：模型看不见它，只有用户自己在输入框手打 [标记] 时才用得上
 		Text(
-			sticker.label,
+			"[${sticker.label}]",
 			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.outline,
 			maxLines = 1,
 			overflow = TextOverflow.Ellipsis,
-			modifier = Modifier.padding(top = 2.dp),
 		)
 	}
 }
 
+/**
+ * 表情包页的空状态。这里没自己画，转手交给 ui.settings 的 EmptyState，
+ * 三页的空状态才会长一样；两个按钮和那行补充小字塞进它的 actions 槽。
+ */
 @Composable
 private fun EmptyGuide(
 	hasPack: Boolean,
@@ -455,25 +679,15 @@ private fun EmptyGuide(
 	onCreatePack: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
-	Column(
-		modifier = modifier
-			.fillMaxSize()
-			.padding(32.dp),
-		verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-		horizontalAlignment = Alignment.CenterHorizontally,
+	EmptyState(
+		emoji = "🖼️",
+		title = "还没有表情",
+		description = "应用里没有预置任何表情 —— 那些图基本都有版权，不敢打包进来分发，" +
+			"所以第一步得自己从相册导入。\n\n" +
+			"AI 是按情绪挑表情的：分组名直接写成情绪词（开心、无语、点赞……），整组图就都归这个情绪，" +
+			"一张都不用识别；组名写成「熊猫头」这类归类名的，导进去的图由后台自动看图分类，你不用操作。",
+		modifier = modifier,
 	) {
-		Text("还没有表情", style = MaterialTheme.typography.titleMedium)
-
-		Text(
-			"应用里没有预置任何表情 —— 那些图基本都有版权，不敢打包进来分发，" +
-				"所以第一步得自己从相册导入。\n\n" +
-				"每张表情都有一个「标记」，默认取文件名（去掉扩展名）。" +
-				"AI 回复里写成 [标记] 的地方会被换成这张图，你自己在输入框里这么写也一样。" +
-				"标记建议用短词，好打好记，比如 开心、无语、点赞。",
-			style = MaterialTheme.typography.bodyMedium,
-			color = MaterialTheme.colorScheme.outline,
-		)
-
 		Button(onClick = onImport, enabled = !importing) {
 			Text(if (importing) "正在导入…" else "从相册导入表情")
 		}
@@ -506,12 +720,13 @@ private fun NameDialog(
 		onDismissRequest = onDismiss,
 		title = { Text(title) },
 		text = {
-			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm)) {
 				OutlinedTextField(
 					value = text,
 					onValueChange = { text = it },
 					label = { Text(fieldLabel) },
 					singleLine = true,
+					shape = PillShape,
 					modifier = Modifier.fillMaxWidth(),
 				)
 				hint?.let {
@@ -538,30 +753,68 @@ private fun NameDialog(
 	)
 }
 
+/**
+ * 单张表情的操作。
+ *
+ * 情绪摆在最前面：它才决定这张图会不会被发出去。改标记压到情绪下面 ——
+ * 标记现在只是"手打 [标记] 时用的名字"，不再是模型看的东西。
+ */
 @Composable
 private fun StickerActionDialog(
 	sticker: StickerEntity,
+	group: StickerPackGroup?,
 	canMove: Boolean,
+	onPickEmotion: () -> Unit,
 	onRename: () -> Unit,
 	onMove: () -> Unit,
 	onDelete: () -> Unit,
 	onDismiss: () -> Unit,
 ) {
+	val byPackName = group?.byPackName == true
+	val emotion = group?.effectiveEmotion(sticker) ?: sticker.emotion.takeIf { it.isNotBlank() }
+
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("[${sticker.label}]") },
 		text = {
-			Column {
+			Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs)) {
+				Row(
+					horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+					verticalAlignment = Alignment.CenterVertically,
+				) {
+					EmotionChip(emotion = emotion)
+					Text(
+						if (byPackName) "来自组名，整组共用" else "按这张图的内容分的",
+						style = MaterialTheme.typography.labelSmall,
+						color = MaterialTheme.colorScheme.outline,
+					)
+				}
+
 				Text(
 					"${sticker.width}×${sticker.height} · ${sticker.byteSize / 1024} KB · " +
 						"发出去过 ${sticker.useCount} 次",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.outline,
 				)
+
+				// 情绪组里改单张是允许的，但现在不生效。宁可说明白也不禁用按钮：
+				// 用户可能正打算把组名改回去，先把情绪定好完全合理
+				if (byPackName) {
+					Text(
+						"这组的组名本身是情绪，组内所有图都按它发。单独给这张定的情绪要等组名改成别的才会生效。",
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.outline,
+					)
+				}
+
+				TextButton(
+					onClick = onPickEmotion,
+					modifier = Modifier.fillMaxWidth(),
+				) { Text(if (byPackName) "改这张的情绪（当前按组名走）" else "改情绪") }
 				TextButton(
 					onClick = onRename,
 					modifier = Modifier.fillMaxWidth(),
-				) { Text("改标记") }
+				) { Text("改标记（内部名字，AI 看不到）") }
 				TextButton(
 					onClick = onMove,
 					enabled = canMove,
@@ -575,6 +828,70 @@ private fun StickerActionDialog(
 		},
 		confirmButton = {
 			TextButton(onClick = onDismiss) { Text("关闭") }
+		},
+	)
+}
+
+/**
+ * 选情绪。词只能从 StickerEmotion.ALL 里点，不给自由输入：
+ * 打成"有点开心"这种词表外的值，模型永远不会写出这个词，那张图就等于永久发不出去了。
+ *
+ * 清除走 onPick("")，跟 StickerViewModel.setEmotion 的空串语义对齐 —— 退回待分类，
+ * 后台下一轮识图会重新捡起它（仓库那边是另一个方法，这层不用关心）。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EmotionPickerDialog(
+	sticker: StickerEntity,
+	packEmotion: String?,
+	onPick: (String) -> Unit,
+	onDismiss: () -> Unit,
+) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("这张算什么情绪") },
+		text = {
+			// 二十个 chip 加说明在小屏上会顶出内容区，AlertDialog 又不自带滚动（同 PackChooserDialog）
+			Column(
+				modifier = Modifier.verticalScroll(rememberScrollState()),
+				verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+			) {
+				Text(
+					"选好之后，AI 写 [这个词] 的时候就有机会挑到这张图。选了会盖掉后台识别出来的结果。",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.outline,
+				)
+
+				packEmotion?.let {
+					Text(
+						"这张图所在的组名已经是情绪「$it」了，整组按组名走 —— 这里选的要等组名改掉才生效。",
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.outline,
+					)
+				}
+
+				FlowRow(
+					horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+					verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+				) {
+					StickerEmotion.ALL.forEach { emotion ->
+						FilterChip(
+							selected = emotion == sticker.emotion,
+							onClick = { onPick(emotion) },
+							label = { Text(emotion) },
+						)
+					}
+				}
+
+				TextButton(
+					onClick = { onPick("") },
+					enabled = sticker.emotion.isNotBlank(),
+					modifier = Modifier.fillMaxWidth(),
+				) { Text("清除，退回待分类") }
+			}
+		},
+		confirmButton = {
+			TextButton(onClick = onDismiss) { Text("取消") }
 		},
 	)
 }

@@ -2,6 +2,7 @@
 // AICP 主模块构建脚本
 
 import java.time.LocalDate
+import java.util.Properties
 
 // 关键约束（都是查证过的，别随手改）：
 // - AGP 9.x 内建 Kotlin，禁止 apply org.jetbrains.kotlin.android
@@ -30,13 +31,39 @@ android {
 		// 每次交付给 KIQ 的包都要递增 versionCode，否则装机时系统不认为是"更新"，
 		// 他也没法从系统信息里分辨手上装的到底是哪一版。
 		// 1 = P0~P6（基础聊天与记忆），2 = P7~P13（附件、表情包、真人模拟、头像备注）
-		versionCode = 2
-		versionName = "0.2.0"
+		// 3 = P14（UI 节奏统一、角色资料卡、图片多选、内置表情机制）
+		// 4 = P15~P16（数据导出恢复、备份口令加密、记忆 wiki 化与记忆体检）
+		// 5 = P17（配置码导入导出、表情按情绪分类与后台识图、GitHub 版本检测、release 签名）
+		versionCode = 5
+		versionName = "0.5.0"
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 		// 精确到天而不是毫秒：带毫秒会让每次构建的 BuildConfig 都变，
 		// 增量编译直接失效，每次都全量重编
 		buildConfigField("String", "BUILD_DATE", "\"${LocalDate.now()}\"")
+	}
+
+	/*
+	 * release 签名。keystore.properties 和 .keystore 都在 .gitignore 里，
+	 * 所以别人 clone 下来这段自动跳过，debug 构建照常。
+	 *
+	 * 这个密钥丢了的后果要说清楚：Android 只允许签名一致的包覆盖安装，
+	 * 换了密钥的新版本装不上去，用户只能卸载重装 —— 那等于数据全丢。
+	 * 所以它必须离开这台机器单独备份。
+	 */
+	val signingProps = rootProject.file("keystore.properties").takeIf { it.isFile }?.let { file ->
+		Properties().apply { file.inputStream().use { load(it) } }
+	}
+
+	signingConfigs {
+		if (signingProps != null) {
+			create("release") {
+				storeFile = rootProject.file(signingProps.getProperty("storeFile"))
+				storePassword = signingProps.getProperty("storePassword")
+				keyAlias = signingProps.getProperty("keyAlias")
+				keyPassword = signingProps.getProperty("keyPassword")
+			}
+		}
 	}
 
 	buildTypes {
@@ -50,6 +77,9 @@ android {
 				getDefaultProguardFile("proguard-android-optimize.txt"),
 				"proguard-rules.pro",
 			)
+			// 没有 keystore.properties 时保持未签名，让构建失败在"签名缺失"上，
+			// 而不是悄悄产出一个装不上的包
+			signingConfig = signingConfigs.findByName("release")
 		}
 	}
 

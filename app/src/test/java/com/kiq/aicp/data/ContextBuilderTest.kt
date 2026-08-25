@@ -17,6 +17,7 @@ import com.kiq.aicp.data.repo.ConversationRepository
 import com.kiq.aicp.data.repo.MemoryRepository
 import com.kiq.aicp.data.repo.PersonaRepository
 import com.kiq.aicp.domain.memory.ContextBuilder
+import com.kiq.aicp.domain.memory.ParsedEntry
 import com.kiq.aicp.domain.model.AicpSettings
 import com.kiq.aicp.domain.model.ChatRole
 import com.kiq.aicp.domain.model.MemoryCardType
@@ -144,19 +145,35 @@ class ContextBuilderTest {
 	}
 
 	@Test
-	fun `记忆卡片和摘要都会拼进系统提示词`() = runTest {
+	fun `记忆条目和摘要都会拼进系统提示词`() = runTest {
 		val persona = seedPersonas().first()
 		val convId = conversations.createSingle(persona.id)
 		chat.appendUser(convId, "在吗")
 
-		memory.upsertCard(null, null, MemoryCardType.RELATION, "称呼", "叫他 KIQ", 5)
+		memory.upsertEntries(
+			conversationId = null,
+			personaId = null,
+			entries = listOf(
+				ParsedEntry(
+					category = MemoryCardType.RELATION,
+					title = "称呼",
+					aliases = listOf("怎么叫"),
+					oneLiner = "叫他 KIQ",
+					body = "叫他 KIQ，不要叫全名。",
+					importance = 5,
+					conflictNote = null,
+				),
+			),
+		)
 		memory.addSummary(convId, level = 1, content = "早些时候聊了压缩", fromMessageId = 0, toMessageId = 2, messageCount = 2)
 		memory.addSummary(convId, level = 2, content = "更早的长期记忆", fromMessageId = 0, toMessageId = 1, messageCount = 1)
 
 		val built = builder.build(convId, persona, settings)
 		val system = built.messages.first().content
 
-		assertTrue(system.contains("[称呼] 叫他 KIQ"))
+		// 条目渲染成小标题加正文，不再是"[键] 值"那种一行
+		assertTrue(system.contains("## 称呼"))
+		assertTrue(system.contains("叫他 KIQ，不要叫全名。"))
 		assertTrue(system.contains("早些时候聊了压缩"))
 		assertTrue(system.contains("更早的长期记忆"))
 		assertEquals(1, built.usedCardIds.size)
@@ -164,10 +181,24 @@ class ContextBuilderTest {
 	}
 
 	@Test
-	fun `卡片上限设为零时不带任何卡片`() = runTest {
+	fun `条目上限设为零时不带任何条目`() = runTest {
 		val persona = seedPersonas().first()
 		val convId = conversations.createSingle(persona.id)
-		memory.upsertCard(null, null, MemoryCardType.FACT, "职业", "安卓开发", 5)
+		memory.upsertEntries(
+			conversationId = null,
+			personaId = null,
+			entries = listOf(
+				ParsedEntry(
+					category = MemoryCardType.FACT,
+					title = "职业",
+					aliases = emptyList(),
+					oneLiner = "安卓开发",
+					body = "安卓开发",
+					importance = 5,
+					conflictNote = null,
+				),
+			),
+		)
 
 		val built = builder.build(convId, persona, settings.copy(memoryCardLimit = 0))
 

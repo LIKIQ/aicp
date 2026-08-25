@@ -1,17 +1,24 @@
 // app/src/main/java/com/kiq/aicp/ui/persona/PersonaListScreen.kt
 // 性格库列表。内置性格能改不能删，删除按钮点了会给出解释而不是静默失败。
+//
+// 行的骨架跟会话列表刻意做成同一副：44dp 圆头像 + 主标题/副标题 + 尾部一个操作。
+// 两页都是"一列可点的卡片"，长得不一样只会让人以为进了另一个应用。
+// 卡片配色和内边距的规则写在 ConversationListScreen 的文件头。
 
 package com.kiq.aicp.ui.persona
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,6 +42,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kiq.aicp.data.db.entity.PersonaEntity
+import com.kiq.aicp.ui.common.Avatar
+import com.kiq.aicp.ui.theme.Dimens
+import java.io.File
+
+/** 跟会话列表同一个值，理由见那边的注释 */
+private val FabClearance = 88.dp
 
 @Composable
 fun PersonaListScreen(
@@ -56,56 +69,73 @@ fun PersonaListScreen(
 	Scaffold(
 		snackbarHost = { SnackbarHost(snackbar) },
 		floatingActionButton = {
-			ExtendedFloatingActionButton(
-				onClick = { onEditPersona(null) },
-				text = { Text("新建性格") },
-				icon = {},
-			)
+			// 不带 icon 槽的重载，跟会话列表、表情包页一致（理由见 ConversationListScreen）
+			ExtendedFloatingActionButton(onClick = { onEditPersona(null) }) {
+				Text("新建性格")
+			}
 		},
 	) { innerPadding ->
 		LazyColumn(
 			modifier = Modifier
 				.fillMaxSize()
 				.padding(innerPadding),
-			contentPadding = androidx.compose.foundation.layout.PaddingValues(
-				start = 12.dp,
-				end = 12.dp,
-				top = 12.dp,
-				bottom = 88.dp,
+			contentPadding = PaddingValues(
+				start = Dimens.screenPadding,
+				end = Dimens.screenPadding,
+				top = Dimens.screenPadding,
+				bottom = FabClearance,
 			),
-			verticalArrangement = Arrangement.spacedBy(8.dp),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 		) {
 			items(personas, key = { it.id }) { persona ->
 				Card(
 					modifier = Modifier
 						.fillMaxWidth()
 						.clickable { onEditPersona(persona.id) },
+					shape = RoundedCornerShape(Dimens.radiusCard),
 					colors = CardDefaults.cardColors(
 						containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
 					),
 				) {
 					Row(
-						modifier = Modifier.padding(14.dp),
+						modifier = Modifier
+							.fillMaxWidth()
+							.heightIn(min = Dimens.touchTargetMin)
+							.padding(
+								start = Dimens.spaceLg,
+								end = Dimens.spaceXs,
+								top = Dimens.spaceMd,
+								bottom = Dimens.spaceMd,
+							),
 						verticalAlignment = Alignment.CenterVertically,
 					) {
-						Text(persona.avatarEmoji, style = MaterialTheme.typography.headlineSmall)
+						Avatar(
+							emoji = persona.avatarEmoji,
+							imagePath = persona.avatarPath,
+							fallbackName = persona.name,
+							resolveFile = viewModel::resolveFile,
+							size = Dimens.avatarList,
+						)
 						Column(
 							modifier = Modifier
 								.weight(1f)
-								.padding(horizontal = 12.dp),
+								.padding(horizontal = Dimens.spaceMd),
 						) {
-							Row(verticalAlignment = Alignment.CenterVertically) {
+							Row(
+								verticalAlignment = Alignment.CenterVertically,
+								horizontalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
+							) {
 								Text(persona.name, style = MaterialTheme.typography.titleMedium)
 								if (persona.isBuiltIn) {
 									Text(
-										"  内置",
+										"内置",
 										style = MaterialTheme.typography.labelSmall,
 										color = MaterialTheme.colorScheme.outline,
 									)
 								}
 								if (persona.generatedFromPrompt != null) {
 									Text(
-										"  AI 生成",
+										"AI 生成",
 										style = MaterialTheme.typography.labelSmall,
 										color = MaterialTheme.colorScheme.primary,
 									)

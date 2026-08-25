@@ -141,6 +141,10 @@ fun AicpApp() {
 						conversationId = conversationId,
 						onBack = { navController.popBackStack() },
 						onOpenSettings = { navController.navigate(TopTab.Settings.route) },
+						// 气泡头像点开的资料卡里那个「编辑」按钮，直接进这个性格的编辑页
+						onEditPersona = { personaId ->
+							navController.navigate(Routes.personaEdit(personaId))
+						},
 					)
 				}
 			}

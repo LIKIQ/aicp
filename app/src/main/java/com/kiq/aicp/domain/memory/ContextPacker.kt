@@ -7,7 +7,8 @@
 package com.kiq.aicp.domain.memory
 
 import com.kiq.aicp.data.db.entity.MemoryCardEntity
-import com.kiq.aicp.domain.sticker.StickerParser
+import com.kiq.aicp.data.db.entity.MemoryEntryEntity
+import com.kiq.aicp.domain.sticker.StickerEmotion
 
 internal object ContextPacker {
 
@@ -49,11 +50,13 @@ internal object SystemPromptComposer {
 	fun compose(
 		personaName: String,
 		personaPrompt: String,
-		cards: List<MemoryCardEntity>,
+		cards: List<MemoryCardEntity> = emptyList(),
+		entries: List<MemoryEntryEntity> = emptyList(),
+		indexLines: List<IndexLine> = emptyList(),
 		longTermSummaries: List<String>,
 		recentSummaries: List<String>,
 		groupMates: List<String>,
-		stickerLabels: List<String> = emptyList(),
+		stickerEmotions: List<String> = emptyList(),
 		moodDescription: String = "",
 	): String = buildString {
 		append(personaPrompt.trim())
@@ -73,6 +76,33 @@ internal object SystemPromptComposer {
 			appendLine("# 你记得关于对方的事")
 			appendLine("这些是你早就知道的信息，说话时自然地用上，不要复述这份清单，也不要说「根据我的记忆」。")
 			cards.forEach { appendLine("- [${it.keyword}] ${it.content}") }
+		}
+
+		// 条目版的记忆。跟卡片的区别是每条有标题和一段正文，所以用小标题分块，
+		// 平铺成一行会让 200 字的正文糊成一片读不出边界
+		if (entries.isNotEmpty()) {
+			appendLine()
+			appendLine()
+			appendLine("# 你记得关于对方的事")
+			appendLine("这些是你早就知道的信息，说话时自然地用上，不要复述这份清单，也不要说「根据我的记忆」。")
+			entries.forEach { entry ->
+				appendLine()
+				appendLine("## ${entry.title}")
+				appendLine(entry.body.trim())
+				// 矛盾要让模型看见：悄悄用新说法会让用户觉得"它记错了还不承认"
+				entry.conflictNote?.takeIf { it.isNotBlank() }?.let {
+					appendLine("（这里有前后不一致：${it.trim()}。不确定时可以问一句确认）")
+				}
+			}
+		}
+
+		// index：知道有这回事但细节没带上来。写清楚"记不清细节"是有意的 ——
+		// 不加这句模型会拿一行摘要当全部事实往下编
+		if (indexLines.isNotEmpty()) {
+			appendLine()
+			appendLine("# 你还隐约记得这些，但细节想不起来了")
+			appendLine("需要用到时可以顺口问一句确认，不要凭这一行摘要编出细节。")
+			indexLines.forEach { appendLine("- ${it.title}：${it.oneLiner}") }
 		}
 
 		if (longTermSummaries.isNotEmpty()) {
@@ -98,11 +128,12 @@ internal object SystemPromptComposer {
 		}
 
 		// 表情清单放在最后：它是"工具说明"性质的内容，
-		// 夹在人设和记忆中间会稀释前面那些更重要的角色设定
-		if (stickerLabels.isNotEmpty()) {
+		// 夹在人设和记忆中间会稀释前面那些更重要的角色设定。
+		// 给的是情绪而不是图名，具体哪张图由 StickerRepository.pickForEmotion 挑
+		if (stickerEmotions.isNotEmpty()) {
 			appendLine()
 			appendLine()
-			append(StickerParser.buildPrompt(stickerLabels))
+			append(StickerEmotion.promptFor(stickerEmotions))
 		}
 	}.trim()
 }

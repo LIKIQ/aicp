@@ -74,6 +74,15 @@ class SettingsStore(
 		dataStore.edit { it[KEY_STICKERS_ENABLED] = enabled }
 	}
 
+	/**
+	 * 用户自己写的记忆规则（wiki 的第三层 schema）。
+	 * 不做内容校验：它是直接拼进提示词的自然语言，写什么都合法，
+	 * 唯一的限制是长度 —— 太长会挤掉本该给对话的预算。
+	 */
+	suspend fun setMemorySchema(schema: String) {
+		dataStore.edit { it[KEY_MEMORY_SCHEMA] = schema.trim().take(MAX_MEMORY_SCHEMA) }
+	}
+
 	suspend fun setStickerPromptLimit(limit: Int) {
 		dataStore.edit { it[KEY_STICKER_LIMIT] = limit.coerceIn(0, 200) }
 	}
@@ -88,6 +97,37 @@ class SettingsStore(
 
 	suspend fun markBuiltInStickersImported() {
 		dataStore.edit { it[KEY_BUILTIN_STICKERS] = true }
+	}
+
+	/**
+	 * 待恢复标记。阶段一解压完置上，阶段二把文件搬完之后由 AicpApplication 清掉。
+	 *
+	 * 它只负责设置页那句"等重启"，不是恢复流程的判据 —— 真正决定要不要搬文件的是
+	 * filesDir/restore_pending 目录在不在。原因是搬运发生在冷启动最前面，
+	 * 那时候读 DataStore 要么阻塞主线程要么得等协程，两种都会让搬运晚于 Room 开库。
+	 */
+	val restorePending: Flow<Boolean> = dataStore.data.map { it[KEY_RESTORE_PENDING] ?: false }
+
+	suspend fun setRestorePending(pending: Boolean) {
+		dataStore.edit { prefs ->
+			// 关掉时直接把键删了而不是写 false：这个键绝大多数时间就不该存在，
+			// 留一个常驻的 false 只会让人以为"曾经恢复过"
+			if (pending) prefs[KEY_RESTORE_PENDING] = true else prefs.remove(KEY_RESTORE_PENDING)
+		}
+	}
+
+	/**
+	 * 上次检查更新的时刻（毫秒）。0 表示从没查过，UpdateChecker 靠它做 24 小时节流。
+	 *
+	 * 为什么不塞进 AicpSettings：它不是用户能调的设置，是一条运行时痕迹。
+	 * 混进去会跟着配置码被导出到另一台设备，让那台机器一装上就以为"刚查过"，
+	 * 而且 ConfigCodec 那份格式契约也会为了它多背一个字段。
+	 */
+	suspend fun lastUpdateCheckAt(): Long = dataStore.data.first()[KEY_LAST_UPDATE_CHECK] ?: 0L
+
+	suspend fun setLastUpdateCheckAt(epochMillis: Long) {
+		// 夹一下负数：时间戳为负没有意义，写进去只会让节流算出一个巨大的间隔
+		dataStore.edit { it[KEY_LAST_UPDATE_CHECK] = epochMillis.coerceAtLeast(0L) }
 	}
 
 	/**
@@ -164,6 +204,51 @@ class SettingsStore(
 		}
 	}
 
+	/**
+	 * 从配置码导入一整份设置，一次 edit 写完。
+	 *
+	 * apiKey 为空时保留现有的，不清掉：明文配置码本来就不带凭证，
+	 * 用户的期望是"其他设置跟过来、Key 我已经填好了"，
+	 * 顺手把他的 Key 抹掉会让他以为导入弄坏了配置。
+	 *
+	 * 数值边界这里不再夹一遍 —— ConfigCodec.toSettings 已经夹过，
+	 * 两处各夹一次迟早会出现两套不一样的上下界。
+	 */
+	suspend fun applyImported(settings: AicpSettings) {
+		dataStore.edit { prefs ->
+			prefs[KEY_BASE_URL] = settings.baseUrl
+			prefs[KEY_MODEL] = settings.model
+			prefs[KEY_COMPRESS_MODEL] = settings.compressModel
+			prefs[KEY_VISION_MODEL] = settings.visionModel
+			prefs[KEY_MAX_IMAGES] = settings.maxImagesInContext
+			prefs[KEY_AUTO_COMPRESS] = settings.autoCompressEnabled
+			prefs[KEY_CONTEXT_BUDGET] = settings.contextBudgetTokens
+			prefs[KEY_KEEP_RECENT] = settings.keepRecentMessages
+			prefs[KEY_TRIGGER_TOKENS] = settings.compressTriggerTokens
+			prefs[KEY_TRIGGER_COUNT] = settings.compressTriggerCount
+			prefs[KEY_MERGE_THRESHOLD] = settings.summaryMergeThreshold
+			prefs[KEY_CARD_LIMIT] = settings.memoryCardLimit
+			prefs[KEY_MAX_SPEAKERS] = settings.groupMaxSpeakersPerTurn
+			prefs[KEY_STICKERS_ENABLED] = settings.stickersEnabled
+			prefs[KEY_STICKER_LIMIT] = settings.stickerPromptLimit
+			prefs[KEY_HUMANIZE_ENABLED] = settings.humanizeEnabled
+			prefs[KEY_HUMANIZE_SEGMENTS] = settings.humanizeMaxSegments
+			prefs[KEY_HUMANIZE_MS_PER_CHAR] = settings.humanizeMsPerChar
+			prefs[KEY_HUMANIZE_READ_DELAY] = settings.humanizeReadDelayMs
+			prefs[KEY_PROACTIVE_ENABLED] = settings.proactiveEnabled
+			prefs[KEY_PROACTIVE_IDLE] = settings.proactiveIdleMinutes
+			prefs[KEY_PROACTIVE_PUSH] = settings.proactivePushEnabled
+			prefs[KEY_PROACTIVE_DAILY] = settings.proactiveDailyLimit
+			prefs[KEY_QUIET_START] = settings.quietHoursStart
+			prefs[KEY_QUIET_END] = settings.quietHoursEnd
+			prefs[KEY_MEMORY_SCHEMA] = settings.memorySchema.take(MAX_MEMORY_SCHEMA)
+			prefs[KEY_DYNAMIC_COLOR] = settings.dynamicColor
+
+			val key = settings.apiKey.trim()
+			if (key.isNotEmpty()) prefs[KEY_API_KEY_ENC] = cipher.encrypt(key)
+		}
+	}
+
 	private fun Preferences.toSettings(): AicpSettings {
 		val defaults = AicpSettings()
 		val storedKey = this[KEY_API_KEY_ENC]
@@ -194,12 +279,16 @@ class SettingsStore(
 			proactiveDailyLimit = this[KEY_PROACTIVE_DAILY] ?: defaults.proactiveDailyLimit,
 			quietHoursStart = this[KEY_QUIET_START] ?: defaults.quietHoursStart,
 			quietHoursEnd = this[KEY_QUIET_END] ?: defaults.quietHoursEnd,
+			memorySchema = this[KEY_MEMORY_SCHEMA] ?: defaults.memorySchema,
 			dynamicColor = this[KEY_DYNAMIC_COLOR] ?: defaults.dynamicColor,
 		)
 	}
 
 	companion object {
 		const val STORE_NAME = "aicp_settings"
+
+		/** 记忆规则的长度上限。它每次压缩都会被注入，写成长篇就是持续的 token 开销 */
+		const val MAX_MEMORY_SCHEMA = 600
 
 		private val KEY_BASE_URL = stringPreferencesKey("base_url")
 		private val KEY_API_KEY_ENC = stringPreferencesKey("api_key_enc")
@@ -211,6 +300,8 @@ class SettingsStore(
 		private val KEY_STICKERS_ENABLED = booleanPreferencesKey("stickers_enabled")
 		private val KEY_STICKER_LIMIT = intPreferencesKey("sticker_prompt_limit")
 		private val KEY_BUILTIN_STICKERS = booleanPreferencesKey("builtin_stickers_imported")
+		private val KEY_RESTORE_PENDING = booleanPreferencesKey("restore_pending")
+		private val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_at")
 		private val KEY_HUMANIZE_ENABLED = booleanPreferencesKey("humanize_enabled")
 		private val KEY_HUMANIZE_SEGMENTS = intPreferencesKey("humanize_max_segments")
 		private val KEY_HUMANIZE_MS_PER_CHAR = intPreferencesKey("humanize_ms_per_char")
@@ -221,6 +312,7 @@ class SettingsStore(
 		private val KEY_PROACTIVE_DAILY = intPreferencesKey("proactive_daily_limit")
 		private val KEY_QUIET_START = intPreferencesKey("quiet_hours_start")
 		private val KEY_QUIET_END = intPreferencesKey("quiet_hours_end")
+		private val KEY_MEMORY_SCHEMA = stringPreferencesKey("memory_schema")
 		private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
 		private val KEY_CONTEXT_BUDGET = intPreferencesKey("context_budget_tokens")
 		private val KEY_KEEP_RECENT = intPreferencesKey("keep_recent_messages")

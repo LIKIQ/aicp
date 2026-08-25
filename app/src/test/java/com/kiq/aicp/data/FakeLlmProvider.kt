@@ -66,5 +66,26 @@ class FakeLlmProvider : LlmProvider {
 			}
 			return """{"summary":"$summary","cards":[$cardJson]}"""
 		}
+
+		/**
+		 * v6 起压缩走 wiki ingest，产出的是 entries 而不是 cards。
+		 * 三元组是 (category, title, body)，oneLiner 用 body 兜 —— 解析器允许它缺失。
+		 */
+		fun wikiIngestJson(
+			summary: String,
+			entries: List<Triple<String, String, String>> = emptyList(),
+			importance: Int = 4,
+			aliases: List<String> = emptyList(),
+			conflict: String? = null,
+		): String {
+			val aliasJson = aliases.joinToString(",") { "\"$it\"" }
+			val conflictJson = conflict?.let { "\"$it\"" } ?: "null"
+			val entryJson = entries.joinToString(",") { (category, title, body) ->
+				"""{"category":"$category","title":"$title","aliases":[$aliasJson],""" +
+					""""oneLiner":"$body","body":"$body","importance":$importance,""" +
+					""""conflict":$conflictJson}"""
+			}
+			return """{"summary":"$summary","entries":[$entryJson]}"""
+		}
 	}
 }

@@ -32,17 +32,37 @@ class BuiltInStickers(
 	 * @return 实际导入的张数。0 表示 assets 里没有素材，或者已经灌过了
 	 */
 	suspend fun importIfNeeded(): Int = withContext(Dispatchers.IO) {
-		val names = runCatching { context.assets.list(ASSET_DIR) }.getOrNull()?.toList().orEmpty()
-		if (names.isEmpty()) return@withContext 0
+		val entries = runCatching { context.assets.list(ASSET_DIR) }.getOrNull()?.toList().orEmpty()
+		if (entries.isEmpty()) return@withContext 0
 
-		val packId = stickerRepository.ensurePack(PACK_NAME)
 		var imported = 0
 
-		names.filter { it.isImageName() }.forEach { name ->
-			runCatching { copyOne(packId, name) }
-				.onSuccess { imported++ }
-				.onFailure { Log.w(TAG, "内置表情 $name 导入失败", it) }
+		// 子目录名就是分组名，也就是这组图的情绪。模型只按情绪选表情，
+		// 所以分好目录的素材开箱可用；散在根下的只能进「默认表情」，
+		// 那个组名不是情绪，得等用户点一次识图才派得上用场
+		entries.filterNot { it.isImageName() }.forEach { dir ->
+			val images = runCatching { context.assets.list("$ASSET_DIR/$dir") }
+				.getOrNull()?.filter { it.isImageName() }.orEmpty()
+			if (images.isEmpty()) return@forEach
+
+			val packId = stickerRepository.ensurePack(dir)
+			images.forEach { name ->
+				runCatching { copyOne(packId, "$dir/$name") }
+					.onSuccess { imported++ }
+					.onFailure { Log.w(TAG, "内置表情 $dir/$name 导入失败", it) }
+			}
 		}
+
+		val loose = entries.filter { it.isImageName() }
+		if (loose.isNotEmpty()) {
+			val packId = stickerRepository.ensurePack(PACK_NAME)
+			loose.forEach { name ->
+				runCatching { copyOne(packId, name) }
+					.onSuccess { imported++ }
+					.onFailure { Log.w(TAG, "内置表情 $name 导入失败", it) }
+			}
+		}
+
 		imported
 	}
 
@@ -50,18 +70,24 @@ class BuiltInStickers(
 	 * assets 里的文件没有 content:// URI，AttachmentStore.saveSticker 那条路走不通，
 	 * 所以先落到一个临时文件，再交给 store 走正常的压缩与落盘流程 ——
 	 * 这样内置表情和用户导入的表情在磁盘上的形态完全一致。
+	 *
+	 * relativePath 可能带子目录（开心/a.png），临时文件名要把分隔符去掉，
+	 * 否则 cacheDir 下会因为目录不存在而写不出来。
 	 */
-	private suspend fun copyOne(packId: Long, assetName: String) {
-		val temp = File(context.cacheDir, "builtin_$assetName")
+	private suspend fun copyOne(packId: Long, relativePath: String) {
+		val flatName = relativePath.replace('/', '_')
+		val temp = File(context.cacheDir, "builtin_$flatName")
 		try {
-			context.assets.open("$ASSET_DIR/$assetName").use { input ->
+			context.assets.open("$ASSET_DIR/$relativePath").use { input ->
 				temp.outputStream().use { output -> input.copyTo(output) }
 			}
+			// 标记只是内部标识，模型看不到，所以直接用文件名；
+			// 撞名时 uniqueLabel 会自己加后缀
 			stickerRepository.importFromFile(
 				packId = packId,
 				file = temp,
-				displayName = assetName,
-				desiredLabel = assetName.substringBeforeLast('.'),
+				displayName = flatName,
+				desiredLabel = relativePath.substringAfterLast('/').substringBeforeLast('.'),
 			)
 		} finally {
 			temp.delete()

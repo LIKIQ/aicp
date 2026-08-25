@@ -8,6 +8,8 @@
 // 头像那一栏原来是个 96dp 的 emoji 输入框，加了图片头像后横着摆不下三样东西，
 // 于是收成"点头像出菜单"：emoji 输入挪进对话框，能力一个没少。
 // 备注单独一张卡放最后，标题下面必须写清"不发给 AI" —— 不写用户就会拿它当提示词使。
+//
+// 输入框圆角分两种：单行走胶囊，多行走卡片圆角。理由见下面 TextAreaShape 的注释。
 
 package com.kiq.aicp.ui.persona
 
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -60,7 +63,20 @@ import com.kiq.aicp.R
 import com.kiq.aicp.ui.common.Avatar
 import com.kiq.aicp.ui.settings.SectionCard
 import com.kiq.aicp.ui.settings.SliderRow
+import com.kiq.aicp.ui.theme.Dimens
 import java.io.File
+
+/** 单行输入框：跟同一行里的按钮同一个胶囊圆角，看着是一套控件 */
+private val PillShape = RoundedCornerShape(Dimens.radiusPill)
+
+/**
+ * 多行文本域用卡片圆角，不跟着单行走胶囊。
+ * 20dp 的圆角搁在八行高的框上会把四个角啃掉一大块，第一行字被圆弧顶得往里缩，读起来别扭。
+ */
+private val TextAreaShape = RoundedCornerShape(Dimens.radiusCard)
+
+/** 行内转圈的直径。控件尺寸，不归 Dimens 那五档间距管 */
+private val InlineSpinner = 16.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,7 +124,7 @@ fun PersonaEditScreen(
 						// 头像还在压缩时先别让存：这会儿存下去的是旧路径，
 						// 压完那张就成了没人引用的孤儿文件
 						enabled = state.draft.valid && !state.generating && !state.avatarSaving,
-						modifier = Modifier.padding(end = 12.dp),
+						modifier = Modifier.padding(end = Dimens.spaceSm),
 					) { Text("保存") }
 				},
 			)
@@ -120,8 +136,8 @@ fun PersonaEditScreen(
 				.fillMaxSize()
 				.padding(innerPadding)
 				.verticalScroll(rememberScrollState())
-				.padding(16.dp),
-			verticalArrangement = Arrangement.spacedBy(16.dp),
+				.padding(Dimens.screenPadding),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceLg),
 		) {
 			SectionCard(
 				title = "用一句话生成",
@@ -132,11 +148,12 @@ fun PersonaEditScreen(
 					onValueChange = { description = it },
 					placeholder = { Text("例如：一个傲娇但很靠谱的猫娘程序员") },
 					modifier = Modifier.fillMaxWidth(),
+					shape = TextAreaShape,
 					minLines = 2,
 					maxLines = 4,
 				)
 				Row(
-					horizontalArrangement = Arrangement.spacedBy(8.dp),
+					horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 					verticalAlignment = Alignment.CenterVertically,
 				) {
 					OutlinedButton(
@@ -145,14 +162,17 @@ fun PersonaEditScreen(
 					) { Text(if (state.generating) "生成中…" else "生成人设") }
 
 					if (state.generating) {
-						CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+						CircularProgressIndicator(
+							modifier = Modifier.size(InlineSpinner),
+							strokeWidth = 2.dp,
+						)
 					}
 				}
 			}
 
 			SectionCard(title = "基本信息") {
 				Row(
-					horizontalArrangement = Arrangement.spacedBy(12.dp),
+					horizontalArrangement = Arrangement.spacedBy(Dimens.spaceMd),
 					verticalAlignment = Alignment.CenterVertically,
 				) {
 					AvatarPicker(
@@ -174,6 +194,7 @@ fun PersonaEditScreen(
 						onValueChange = { value -> viewModel.update { it.copy(name = value) } },
 						label = { Text("名字") },
 						singleLine = true,
+						shape = PillShape,
 						modifier = Modifier.weight(1f),
 					)
 				}
@@ -190,6 +211,7 @@ fun PersonaEditScreen(
 					label = { Text("一句话简介") },
 					supportingText = { Text("只在列表里给你自己看，不会进提示词") },
 					singleLine = true,
+					shape = PillShape,
 					modifier = Modifier.fillMaxWidth(),
 				)
 
@@ -199,6 +221,7 @@ fun PersonaEditScreen(
 					label = { Text("开场白") },
 					supportingText = { Text("新建会话时它会先说这句；留空则不主动开口") },
 					modifier = Modifier.fillMaxWidth(),
+					shape = TextAreaShape,
 					maxLines = 3,
 				)
 			}
@@ -215,6 +238,7 @@ fun PersonaEditScreen(
 					value = state.draft.systemPrompt,
 					onValueChange = { value -> viewModel.update { it.copy(systemPrompt = value) } },
 					modifier = Modifier.fillMaxWidth(),
+					shape = TextAreaShape,
 					minLines = 8,
 					placeholder = { Text("你叫…，说话…，不要…") },
 				)
@@ -253,6 +277,7 @@ fun PersonaEditScreen(
 					label = { Text("专用模型（可留空）") },
 					supportingText = { Text("留空跟随设置里的全局模型") },
 					singleLine = true,
+					shape = PillShape,
 					modifier = Modifier.fillMaxWidth(),
 				)
 			}
@@ -266,6 +291,7 @@ fun PersonaEditScreen(
 					onValueChange = { value -> viewModel.update { it.copy(note = value) } },
 					placeholder = { Text("例如：这套人设是深夜写代码时用的，白天太吵") },
 					modifier = Modifier.fillMaxWidth(),
+					shape = TextAreaShape,
 					minLines = 3,
 					maxLines = 5,
 				)
@@ -305,19 +331,20 @@ private fun AvatarPicker(
 			imagePath = imagePath,
 			fallbackName = name,
 			resolveFile = resolveFile,
-			size = 64.dp,
+			size = Dimens.avatarLarge,
 			// clip 放在 clickable 前面，不然按下去的水波纹是个方块
 			modifier = Modifier
 				.clip(CircleShape)
 				.clickable(enabled = !saving) { menuOpen = true },
 		)
 
-		// 落盘要解码 + 缩放 + PNG 编码，选到几十兆的图会卡一下，盖个转圈免得用户以为没点上
+		// 落盘要解码 + 缩放 + PNG 编码，选到几十兆的图会卡一下，盖个转圈免得用户以为没点上。
+		// padding 取 spaceXl，正好让转圈剩 24dp —— 再大就把头像整个糊住了
 		if (saving) {
 			CircularProgressIndicator(
 				modifier = Modifier
-					.size(64.dp)
-					.padding(20.dp),
+					.size(Dimens.avatarLarge)
+					.padding(Dimens.spaceXl),
 				strokeWidth = 2.dp,
 			)
 		}
@@ -366,12 +393,13 @@ private fun EmojiInputDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("输入 emoji") },
 		text = {
-			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Column(verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm)) {
 				OutlinedTextField(
 					value = text,
 					onValueChange = { text = it.take(4) },
 					label = { Text("头像 emoji") },
 					singleLine = true,
+					shape = PillShape,
 					modifier = Modifier.fillMaxWidth(),
 				)
 				Text(

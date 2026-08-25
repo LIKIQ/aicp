@@ -43,8 +43,8 @@ class StickerRepositoryTest {
 		db.close()
 	}
 
-	/** 直接插库，绕开需要 Uri 的 import() */
-	private suspend fun seed(packId: Long, label: String): Long =
+	/** 直接插库，绕开需要 Uri 的 import()。emotion 传空串就是"还没识别过" */
+	private suspend fun seed(packId: Long, label: String, emotion: String = ""): Long =
 		db.stickerDao().insertSticker(
 			StickerEntity(
 				packId = packId,
@@ -54,6 +54,7 @@ class StickerRepositoryTest {
 				byteSize = 512,
 				width = 200,
 				height = 200,
+				emotion = emotion,
 				createdAt = 1_000L,
 			),
 		)
@@ -256,5 +257,226 @@ class StickerRepositoryTest {
 		repo.bumpUsage(emptyList())
 
 		assertEquals(0, db.stickerDao().byLabel("开心")!!.useCount)
+	}
+
+	// ---------------- 情绪：两条来源的合并 ----------------
+	//
+	// 情绪要么来自分组名（整组共用），要么来自每张图识图的结果。
+	// 下面每条都明确站在其中一条来源上，混着测的话某一条断了也看不出是哪条。
+
+	@Test
+	fun `promptEmotions 认出组名本身就是情绪的组`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		val sad = repo.createPack("伤心表情包")
+		seed(sad, "猫猫哭")
+
+		assertEquals(setOf("开心", "伤心"), repo.promptEmotions(10).toSet())
+	}
+
+	@Test
+	fun `promptEmotions 也收非情绪分组里识图标出来的情绪`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "无语")
+		// 还没识别的那张不该让"我的收藏"这个组名漏进清单
+		seed(fav, "图B")
+
+		assertEquals(listOf("无语"), repo.promptEmotions(10))
+	}
+
+	@Test
+	fun `promptEmotions 两条来源撞上同一个情绪只算一份`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "开心")
+
+		assertEquals(listOf("开心"), repo.promptEmotions(10))
+	}
+
+	@Test
+	fun `情绪分组里图上的 emotion 不单独算，整组共用组名`() = runTest {
+		val happy = repo.createPack("开心")
+		// 这张图上留着跟组名不一样的旧识别结果，组名是情绪时它不该被当成来源
+		seed(happy, "熊猫笑", emotion = "伤心")
+
+		assertEquals(listOf("开心"), repo.promptEmotions(10))
+	}
+
+	@Test
+	fun `promptEmotions 按热度降序并限量`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "无语")
+		repo.bumpUsage(listOf("图A"))
+		repo.bumpUsage(listOf("图A"))
+
+		assertEquals(listOf("无语", "开心"), repo.promptEmotions(10))
+		assertEquals(listOf("无语"), repo.promptEmotions(1))
+		assertTrue(repo.promptEmotions(0).isEmpty())
+	}
+
+	@Test
+	fun `热度相同时按词表顺序，同一份库两次拼出的清单要一样`() = runTest {
+		val sad = repo.createPack("伤心")
+		seed(sad, "猫猫哭")
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+
+		// ALL 里"开心"在"伤心"前面
+		assertEquals(listOf("开心", "伤心"), repo.promptEmotions(10))
+	}
+
+	@Test
+	fun `一张表情都没有时清单为空，等于表情功能自动不生效`() = runTest {
+		repo.createPack("开心")
+
+		assertTrue(repo.promptEmotions(10).isEmpty())
+	}
+
+	@Test
+	fun `pickForEmotion 从情绪分组里挑`() = runTest {
+		val happy = repo.createPack("开心的图")
+		seed(happy, "熊猫笑")
+
+		assertEquals("熊猫笑", repo.pickForEmotion("开心"))
+	}
+
+	@Test
+	fun `pickForEmotion 从识图结果里挑`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "无语")
+
+		assertEquals("图A", repo.pickForEmotion("无语"))
+	}
+
+	@Test
+	fun `pickForEmotion 两条来源合在一起随机挑`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "开心")
+
+		val seen = (1..60).mapNotNull { repo.pickForEmotion("开心") }.toSet()
+
+		assertEquals(setOf("熊猫笑", "图A"), seen)
+	}
+
+	@Test
+	fun `pickForEmotion 对词表外的词和没图的情绪都给 null`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "无语")
+
+		assertNull("分组名不是情绪，不该被当成情绪来挑图", repo.pickForEmotion("我的收藏"))
+		assertNull(repo.pickForEmotion("开心"))
+		assertNull(repo.pickForEmotion(""))
+	}
+
+	@Test
+	fun `unclassifiedIn 只给还没识别的那些`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A", emotion = "无语")
+		seed(fav, "图B")
+		seed(fav, "图C")
+
+		assertEquals(setOf("图B", "图C"), repo.unclassifiedIn(fav).map { it.label }.toSet())
+		assertEquals(2, repo.unclassifiedCount(fav))
+	}
+
+	@Test
+	fun `组名本身是情绪时整组都不用识别`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		seed(happy, "熊猫乐")
+
+		assertEquals(0, repo.unclassifiedCount(happy))
+		assertTrue(repo.unclassifiedIn(happy).isEmpty())
+	}
+
+	@Test
+	fun `分组不存在时待识别是 0 而不是异常`() = runTest {
+		assertEquals(0, repo.unclassifiedCount(999))
+		assertTrue(repo.unclassifiedIn(999).isEmpty())
+	}
+
+	@Test
+	fun `allUnclassified 跨组给出所有该识别的图`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A")
+		seed(fav, "图B", emotion = "无语")
+		val panda = repo.createPack("熊猫头")
+		seed(panda, "图C")
+
+		assertEquals(setOf("图A", "图C"), repo.allUnclassified().map { it.label }.toSet())
+	}
+
+	@Test
+	fun `allUnclassified 不碰情绪分组，那些组整组共用组名`() = runTest {
+		val happy = repo.createPack("开心")
+		seed(happy, "熊猫笑")
+		seed(happy, "熊猫乐")
+		val fav = repo.createPack("我的收藏")
+		seed(fav, "图A")
+
+		assertEquals(listOf("图A"), repo.allUnclassified().map { it.label })
+	}
+
+	@Test
+	fun `全是情绪分组时后台识图无事可做`() = runTest {
+		val happy = repo.createPack("开心的图")
+		seed(happy, "熊猫笑")
+		val sad = repo.createPack("伤心表情包")
+		seed(sad, "猫猫哭")
+
+		assertTrue(repo.allUnclassified().isEmpty())
+	}
+
+	@Test
+	fun `setEmotion 只接受词表里的值，模型胡说的一律忽略`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		val id = seed(fav, "图A")
+
+		repo.setEmotion(id, " 开心 ")
+		assertEquals("开心", db.stickerDao().byId(id)?.emotion)
+
+		repo.setEmotion(id, "略带忧郁的欣喜")
+		assertEquals("已有的识别结果不能被一句胡话冲掉", "开心", db.stickerDao().byId(id)?.emotion)
+	}
+
+	@Test
+	fun `识别过的图不会再被后台任务捞出来跑第二遍`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		val id = seed(fav, "图A")
+
+		repo.setEmotion(id, "开心")
+
+		assertTrue(repo.allUnclassified().isEmpty())
+	}
+
+	@Test
+	fun `setEmotion 传空串是 no-op，清除必须走 clearEmotion`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		val id = seed(fav, "图A", emotion = "开心")
+
+		repo.setEmotion(id, "")
+		repo.setEmotion(id, "   ")
+
+		// 空串合法的话，"模型没解析出结果"和"用户要清除"就分不开了
+		assertEquals("开心", db.stickerDao().byId(id)?.emotion)
+	}
+
+	@Test
+	fun `clearEmotion 把图退回待识别，下次后台识图会再捡起它`() = runTest {
+		val fav = repo.createPack("我的收藏")
+		val id = seed(fav, "图A", emotion = "开心")
+
+		repo.clearEmotion(id)
+
+		assertEquals("", db.stickerDao().byId(id)?.emotion)
+		assertEquals(listOf("图A"), repo.allUnclassified().map { it.label })
+		assertEquals(1, repo.unclassifiedCount(fav))
+		// 清掉之后它也不该再被当成"开心"发出去
+		assertNull(repo.pickForEmotion("开心"))
 	}
 }

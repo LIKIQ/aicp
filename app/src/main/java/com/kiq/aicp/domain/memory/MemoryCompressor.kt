@@ -9,6 +9,7 @@
 package com.kiq.aicp.domain.memory
 
 import com.kiq.aicp.data.db.entity.ConversationEntity
+import com.kiq.aicp.data.db.entity.MemoryLogKind
 import com.kiq.aicp.data.remote.LlmException
 import com.kiq.aicp.data.remote.LlmMessage
 import com.kiq.aicp.data.remote.LlmParams
@@ -101,11 +102,19 @@ class MemoryCompressor(
 			id?.let { personaNames[it] } ?: "助手"
 		}
 
+		// wiki ingest 的三份输入：已有条目索引、跟这段对话相关的条目正文、用户自己的记忆规则。
+		// index 只带标题和一行摘要，相关条目才带正文 —— 全量正文塞进去的话，
+		// 条目一多就把这次调用的上下文吃光了
+		val index = memoryRepository.entryIndex(conversationId, soloPersonaId, ENTRY_INDEX_LIMIT)
+		val related = memoryRepository
+			.relatedEntries(conversationId, soloPersonaId, transcript, RELATED_ENTRY_LIMIT)
+			.map { RelatedEntry(it.category, it.title, it.body) }
+
 		val raw = try {
 			llmProvider.complete(
 				messages = listOf(
-					LlmMessage(ChatRole.SYSTEM, CompressionPrompts.summarizerSystem()),
-					LlmMessage(ChatRole.USER, CompressionPrompts.summarizerUser(transcript)),
+					LlmMessage(ChatRole.SYSTEM, CompressionPrompts.wikiIngestSystem(settings.memorySchema)),
+					LlmMessage(ChatRole.USER, CompressionPrompts.wikiIngestUser(index, related, transcript)),
 				),
 				params = LlmParams(
 					model = settings.effectiveCompressModel(),
@@ -122,7 +131,7 @@ class MemoryCompressor(
 			)
 		}
 
-		val parsed = CompressionPrompts.parse(raw)
+		val parsed = CompressionPrompts.parseWiki(raw)
 		if (parsed.summary.isBlank()) {
 			chatRepository.markCompressionFailed(conversationId)
 			return@withLock CompressionResult.Failed("模型没有产出摘要", retryable = true)
@@ -138,29 +147,38 @@ class MemoryCompressor(
 			needsSemanticRedo = !parsed.strict,
 		)
 
-		var cardsWritten = 0
-		parsed.cards.forEach { card ->
-			val (scopeConversation, scopePersona) = scopeOf(card.type, conversationId, soloPersonaId)
-			val id = memoryRepository.upsertCard(
-				conversationId = scopeConversation,
-				personaId = scopePersona,
-				type = card.type,
-				keyword = card.keyword,
-				content = card.content,
-				importance = card.importance,
-			)
-			if (id > 0) cardsWritten++
-		}
+		// 条目按作用域分组落库。同一次 ingest 里 FACT 进全局、EVENT 进本会话，
+		// 所以不能一把 upsert，得按 scope 分开调
+		val touchedTitles = mutableListOf<String>()
+		parsed.entries.groupBy { scopeOf(it.category, conversationId, soloPersonaId) }
+			.forEach { (scope, entries) ->
+				touchedTitles += memoryRepository.upsertEntries(
+					conversationId = scope.first,
+					personaId = scope.second,
+					entries = entries,
+				)
+			}
 
-		// 到这一步才推进游标：摘要和卡片都已经落库了
+		// 到这一步才推进游标：摘要和条目都已经落库了
 		chatRepository.commitCompression(conversationId, untilId)
+
+		memoryRepository.appendLog(
+			conversationId = conversationId,
+			kind = MemoryLogKind.INGEST,
+			summary = buildString {
+				append("压缩了 ${target.size} 条对话")
+				if (touchedTitles.isNotEmpty()) append("，更新条目 ${touchedTitles.size} 个")
+				if (!parsed.strict) append("（模型没按格式输出，只留了粗摘要）")
+			},
+			touchedTitles = touchedTitles,
+		)
 
 		val merged = maybeMergeSummaries(conversationId, settings)
 
 		CompressionResult.Compressed(
 			summaryId = summaryId,
 			compressedMessages = target.size,
-			cardsWritten = cardsWritten,
+			cardsWritten = touchedTitles.size,
 			mergedSummaries = merged,
 			strict = parsed.strict,
 		)
@@ -251,5 +269,14 @@ class MemoryCompressor(
 		const val LEVEL_LONG_TERM = 2
 		const val BASE_BACKOFF_MS = 30_000L
 		const val MAX_BACKOFF_SHIFT = 5
+
+		/**
+		 * 注入 ingest 的索引条数上限。每行只有标题加一行摘要，约 20 token，
+		 * 60 行大概 1200 token —— 在 compressModel 上可以接受，再多就该考虑分类过滤了
+		 */
+		const val ENTRY_INDEX_LIMIT = 60
+
+		/** 带正文一起给模型的相关条目数。正文 200 字上限，8 条约 1600 字 */
+		const val RELATED_ENTRY_LIMIT = 8
 	}
 }

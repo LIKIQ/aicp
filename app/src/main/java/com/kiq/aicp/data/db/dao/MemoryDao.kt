@@ -13,6 +13,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.kiq.aicp.data.db.entity.MemoryCardEntity
+import com.kiq.aicp.data.db.entity.MemoryEntryEntity
+import com.kiq.aicp.data.db.entity.MemoryLogEntity
 import com.kiq.aicp.data.db.entity.MemorySummaryEntity
 import com.kiq.aicp.domain.model.MemoryCardType
 import kotlinx.coroutines.flow.Flow
@@ -111,4 +113,104 @@ interface MemoryDao {
 			"AND lastHitAt < :before",
 	)
 	suspend fun pruneColdCards(maxImportance: Int, before: Long): Int
+
+	// ---------------- 条目（wiki 第二层，v6 起取代卡片） ----------------
+
+	/**
+	 * index 视图：只取分类、标题、别名、一行摘要，不带正文。
+	 * 注入 system prompt 的索引走这个查询 —— 全表正文一起塞进上下文的话，
+	 * 条目一多就把预算吃光了，而索引的作用只是让模型知道"有哪些记忆存在"。
+	 */
+	@Query(
+		"SELECT category, title, aliases, oneLiner FROM memory_entries " +
+			"WHERE scopeKey IN (:scopeKeys) ORDER BY category ASC, importance DESC LIMIT :limit",
+	)
+	suspend fun getEntryIndex(scopeKeys: List<String>, limit: Int): List<MemoryEntryIndexRow>
+
+	/** 底座条目：钉住和高重要度的，每轮必带 */
+	@Query(
+		"SELECT * FROM memory_entries WHERE scopeKey IN (:scopeKeys) " +
+			"ORDER BY pinned DESC, importance DESC, updatedAt DESC LIMIT :limit",
+	)
+	suspend fun getEntriesForContext(scopeKeys: List<String>, limit: Int): List<MemoryEntryEntity>
+
+	/** 按 id 精确取，关键词命中后补齐正文用 */
+	@Query("SELECT * FROM memory_entries WHERE id IN (:ids)")
+	suspend fun getEntriesByIds(ids: List<Long>): List<MemoryEntryEntity>
+
+	/** 作用域内全部条目，检索匹配和 lint 都要遍历 */
+	@Query("SELECT * FROM memory_entries WHERE scopeKey IN (:scopeKeys)")
+	suspend fun getEntriesInScopes(scopeKeys: List<String>): List<MemoryEntryEntity>
+
+	@Query(
+		"SELECT * FROM memory_entries WHERE scopeKey = :scopeKey AND category = :category " +
+			"AND title = :title LIMIT 1",
+	)
+	suspend fun findEntry(
+		scopeKey: String,
+		category: MemoryCardType,
+		title: String,
+	): MemoryEntryEntity?
+
+	@Query("SELECT * FROM memory_entries ORDER BY pinned DESC, updatedAt DESC")
+	fun observeAllEntries(): Flow<List<MemoryEntryEntity>>
+
+	/** 体检要的一次性快照。Flow 那个用来喂 UI，这个用来喂 lint */
+	@Query("SELECT * FROM memory_entries")
+	suspend fun getAllEntries(): List<MemoryEntryEntity>
+
+	@Query(
+		"SELECT * FROM memory_entries WHERE conversationId = :convId OR conversationId IS NULL " +
+			"ORDER BY pinned DESC, importance DESC, updatedAt DESC",
+	)
+	fun observeEntriesVisibleTo(convId: Long): Flow<List<MemoryEntryEntity>>
+
+	@Insert(onConflict = OnConflictStrategy.REPLACE)
+	suspend fun insertEntry(entry: MemoryEntryEntity): Long
+
+	@Update
+	suspend fun updateEntry(entry: MemoryEntryEntity)
+
+	@Query("DELETE FROM memory_entries WHERE id = :id")
+	suspend fun deleteEntry(id: Long)
+
+	@Query("UPDATE memory_entries SET hitCount = hitCount + 1, lastHitAt = :at WHERE id IN (:ids)")
+	suspend fun touchEntries(ids: List<Long>, at: Long)
+
+	@Query("UPDATE memory_entries SET pinned = :pinned, updatedAt = :at WHERE id = :id")
+	suspend fun setEntryPinned(id: Long, pinned: Boolean, at: Long)
+
+	@Query("SELECT COUNT(*) FROM memory_entries")
+	suspend fun countEntries(): Int
+
+	@Query(
+		"DELETE FROM memory_entries WHERE pinned = 0 AND importance <= :maxImportance " +
+			"AND lastHitAt < :before",
+	)
+	suspend fun pruneColdEntries(maxImportance: Int, before: Long): Int
+
+	// ---------------- 操作日志（wiki 的 log.md） ----------------
+
+	@Insert
+	suspend fun insertLog(log: MemoryLogEntity): Long
+
+	@Query("SELECT * FROM memory_logs ORDER BY createdAt DESC LIMIT :limit")
+	fun observeRecentLogs(limit: Int): Flow<List<MemoryLogEntity>>
+
+	@Query("SELECT * FROM memory_logs ORDER BY createdAt DESC LIMIT :limit")
+	suspend fun recentLogs(limit: Int): List<MemoryLogEntity>
+
+	@Query("DELETE FROM memory_logs WHERE createdAt < :before")
+	suspend fun pruneLogsBefore(before: Long): Int
+
+	@Query("SELECT COUNT(*) FROM memory_logs")
+	suspend fun countLogs(): Int
 }
+
+/** index 查询的投影行。只有索引需要的四列，不含正文 */
+data class MemoryEntryIndexRow(
+	val category: MemoryCardType,
+	val title: String,
+	val aliases: String,
+	val oneLiner: String,
+)

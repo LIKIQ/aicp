@@ -31,10 +31,14 @@ import kotlinx.coroutines.launch
 
 class PersonaListViewModel(
 	private val personaRepository: PersonaRepository,
+	private val attachmentStore: AttachmentStore,
 ) : ViewModel() {
 
 	val personas: StateFlow<List<PersonaEntity>> = personaRepository.observeAll()
 		.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+	/** 列表里的头像要能显示图片，不然编辑页配了图这里还是 emoji，两处对不上 */
+	fun resolveFile(localPath: String): File = attachmentStore.resolve(localPath)
 
 	private val _message = MutableStateFlow<String?>(null)
 	val message: StateFlow<String?> = _message
@@ -57,7 +61,8 @@ class PersonaListViewModel(
 	companion object {
 		val Factory = viewModelFactory {
 			initializer {
-				PersonaListViewModel(AicpApplication.container().personaRepository)
+				val c = AicpApplication.container()
+				PersonaListViewModel(c.personaRepository, c.attachmentStore)
 			}
 		}
 	}

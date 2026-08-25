@@ -101,6 +101,18 @@ data class AicpSettings(
 	val quietHoursStart: Int = 23,
 	val quietHoursEnd: Int = 8,
 
+	/**
+	 * 用户自己写的记忆规则 —— wiki 三层结构里的第三层（schema）。
+	 *
+	 * Karpathy 那份 llm-wiki 里 schema 是"你和 LLM 共同演进的配置文件"，
+	 * 所以它不该是我硬编码在提示词里的东西。用户可以在这里写
+	 * "重点记我的健康数据""别记工作细节""我说过的话优先于你的推断"，
+	 * 压缩时注入，且优先级高于内置约定。
+	 *
+	 * 空串表示只用内置约定。
+	 */
+	val memorySchema: String = "",
+
 	val dynamicColor: Boolean = true,
 ) {
 

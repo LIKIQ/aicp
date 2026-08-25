@@ -73,39 +73,67 @@ class ContextBuilder(
 			minCount = MIN_RECENT,
 		) { it.tokenEstimate }
 
-		// ---- 记忆卡片 ----
+		// ---- 记忆条目（wiki 第二层） ----
 		// 原文没花完的额度先并进记忆预算，最后记忆没花完的再退回去带更早的原文，两头都别空着
 		val memoryBudget = memoryQuota + (recentQuota - recentPack.tokens).coerceAtLeast(0)
-		val cardCandidates = if (settings.memoryCardLimit > 0) {
-			memoryRepository.contextCards(
+
+		// 检索用的探针文本：最近几条对话。用它去撞条目的标题和别名，
+		// 撞上的条目带正文进上下文 —— 这是不用 embedding 的那条检索路
+		val probeText = recentPack.taken.takeLast(PROBE_MESSAGES).joinToString(" ") { it.content }
+
+		val entryCandidates = if (settings.memoryCardLimit > 0) {
+			// 底座：钉住和高重要度的，每轮必带
+			val base = memoryRepository.contextEntries(
 				convId = conversationId,
 				personaId = speaker.id,
 				limit = settings.memoryCardLimit,
 			)
+			// 检索：跟当前话题相关的。相关条目排在底座前面 ——
+			// 装箱是按顺序砍尾巴的，排前面才不会先被砍掉
+			val related = memoryRepository.relatedEntries(
+				convId = conversationId,
+				personaId = speaker.id,
+				text = probeText,
+				limit = RELATED_LIMIT,
+			)
+			val relatedIds = related.map { it.id }.toSet()
+			related + base.filterNot { it.id in relatedIds }
 		} else {
 			emptyList()
 		}
-		val cardPack = ContextPacker.takeWithin(
-			items = cardCandidates,
+
+		val entryPack = ContextPacker.takeWithin(
+			items = entryCandidates,
 			budget = (memoryBudget * CARD_RATIO).toInt(),
-		) { TokenEstimator.estimateText(it.content) + SystemPromptComposer.CARD_OVERHEAD_TOKENS }
+		) { TokenEstimator.estimateText(it.body) + SystemPromptComposer.CARD_OVERHEAD_TOKENS }
+
+		// index：没被带上正文的那些条目，只给标题和一行摘要。
+		// 作用是让模型知道"这些事我知道但细节想不起来了"，而不是干脆表现得从没听过 ——
+		// 人的记忆本来就是这样的，而且它可以据此主动问一句
+		val takenTitles = entryPack.taken.map { it.title }.toSet()
+		val indexLines = if (settings.memoryCardLimit > 0) {
+			memoryRepository.entryIndex(conversationId, speaker.id, INDEX_LIMIT)
+				.filterNot { it.title in takenTitles }
+		} else {
+			emptyList()
+		}
 
 		// ---- L2 长期记忆（条数很少，尽量全带） ----
 		val longTerm = memoryRepository.activeSummaries(conversationId, level = LEVEL_LONG_TERM)
 		val longTermPack = ContextPacker.takeWithin(
 			items = longTerm,
-			budget = memoryBudget - cardPack.tokens,
+			budget = memoryBudget - entryPack.tokens,
 		) { it.tokenEstimate }
 
 		// ---- L1 段摘要（从新往旧装，装不下的是更早的） ----
 		val recentSummaries = memoryRepository.activeSummaries(conversationId, level = LEVEL_SEGMENT)
 		val summaryPack = ContextPacker.takeWithin(
 			items = recentSummaries.asReversed(),
-			budget = memoryBudget - cardPack.tokens - longTermPack.tokens,
+			budget = memoryBudget - entryPack.tokens - longTermPack.tokens,
 		) { it.tokenEstimate }
 
 		// ---- 记忆没花完的额度退回给原文 ----
-		val leftover = memoryBudget - cardPack.tokens - longTermPack.tokens - summaryPack.tokens
+		val leftover = memoryBudget - entryPack.tokens - longTermPack.tokens - summaryPack.tokens
 		val olderCandidates = newestFirst.drop(recentPack.taken.size)
 		val extraPack = if (leftover > 0 && olderCandidates.isNotEmpty()) {
 			ContextPacker.takeWithin(items = olderCandidates, budget = leftover) { it.tokenEstimate }
@@ -134,13 +162,14 @@ class ContextBuilder(
 		val systemPrompt = SystemPromptComposer.compose(
 			personaName = speaker.name,
 			personaPrompt = speaker.systemPrompt,
-			cards = cardPack.taken,
+			entries = entryPack.taken,
+			indexLines = indexLines,
 			longTermSummaries = longTermPack.taken.map { it.content },
 			// 装箱时是新→旧，喂给模型要回到早→晚
 			recentSummaries = summaryPack.taken.reversed().map { it.content },
 			groupMates = groupMates.map { it.name },
-			stickerLabels = if (settings.stickersEnabled) {
-				stickerRepository?.promptLabels(settings.stickerPromptLimit).orEmpty()
+			stickerEmotions = if (settings.stickersEnabled) {
+				stickerRepository?.promptEmotions(settings.stickerPromptLimit).orEmpty()
 			} else {
 				emptyList()
 			},
@@ -167,7 +196,7 @@ class ContextBuilder(
 			messages = messages,
 			estimatedTokens = TokenEstimator.estimateMessages(messages.map { it.content }) +
 				imageCount * ChatRepository.IMAGE_TOKEN_ESTIMATE,
-			usedCardIds = cardPack.taken.map { it.id },
+			usedCardIds = entryPack.taken.map { it.id },
 			recentMessageCount = history.size,
 			summaryCount = longTermPack.taken.size + summaryPack.taken.size,
 			droppedMessageCount = extraPack.dropped,
@@ -244,5 +273,14 @@ class ContextBuilder(
 		const val MAX_CANDIDATES = 200
 		const val LEVEL_SEGMENT = 1
 		const val LEVEL_LONG_TERM = 2
+
+		/** 拿最近几条对话当检索探针。取太多会把早就聊完的话题也撞出来 */
+		const val PROBE_MESSAGES = 4
+
+		/** 关键词命中的条目最多带几条正文进上下文 */
+		const val RELATED_LIMIT = 5
+
+		/** index 最多列几行。每行标题加一行摘要约 20 token */
+		const val INDEX_LIMIT = 30
 	}
 }

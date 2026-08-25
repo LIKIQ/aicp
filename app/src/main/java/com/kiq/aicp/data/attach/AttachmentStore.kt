@@ -20,6 +20,7 @@ import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -55,11 +56,19 @@ class AttachmentStore(
 		/** 单张图片资产的体积上限，动图也按这个卡 */
 		private const val STICKER_MAX_BYTES = 2 * 1024 * 1024
 
-		/** 附件卡片上显示的体积。1024 进制，跟系统文件管理器口径一致 */
+		/**
+		 * 附件卡片上显示的体积。1024 进制，跟系统文件管理器口径一致。
+		 *
+		 * 显式传 Locale 而不是让它取默认：这串数字是给用户看的，
+		 * 该跟着系统语言走（阿拉伯语环境下小数点和数字符号都不一样），
+		 * 但"跟着系统走"必须写出来，隐式默认是 lint 盯的那类坑。
+		 */
 		fun humanSize(bytes: Long): String = when {
 			bytes < 1024 -> "$bytes B"
-			bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
-			else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+			bytes < 1024 * 1024 ->
+				String.format(Locale.getDefault(), "%.1f KB", bytes / 1024.0)
+			else ->
+				String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
 		}
 	}
 

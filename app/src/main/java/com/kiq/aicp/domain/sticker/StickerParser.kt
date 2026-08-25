@@ -26,8 +26,11 @@ object StickerParser {
 	/**
 	 * 标记长度卡在 20 字符：真表情名不会更长，
 	 * 放宽反而会把大段方括号内容（引用块、数组字面量）拖进来试匹配。
+	 *
+	 * 开放给 StickerGroupResolver 复用：分组名替换和渲染切片必须用同一套匹配规则，
+	 * 两边各写一个正则，早晚出现"这边认那边不认"的标记。
 	 */
-	private val MARKER = Regex("""\[([^\[\]\n]{1,20})](?!\()""")
+	internal val MARKER = Regex("""\[([^\[\]\n]{1,20})](?!\()""")
 
 	/** 注入 system prompt 的表情清单上限，防止标记列表本身吃掉上千 token */
 	const val PROMPT_LIMIT = 40

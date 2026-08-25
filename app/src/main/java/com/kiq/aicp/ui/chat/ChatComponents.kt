@@ -3,11 +3,18 @@
 //
 // 气泡配色不用 primary：那是按钮色，聊天两侧都用它会跟操作元素撞在一起，
 // 所以单独在 Theme 里开了 LocalBubbleColors。
+//
+// 尺寸一律走 Dimens，页面里不再手写 dp。原来这里 12/8/4 混着来，单看每处都正常，
+// 一屏滑下来就是"说不清哪里别扭"。唯一两个例外（气泡尖角、附件缩略图）在文件末尾，
+// 各自写了为什么没进全局标尺。
+//
+// AI 那侧的头像可点，弹角色资料卡；卡片本体在 ChatScreen 里，这里只负责把点击抛出去。
 
 package com.kiq.aicp.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +34,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -62,6 +70,7 @@ import com.kiq.aicp.domain.model.AttachmentKind
 import com.kiq.aicp.domain.model.ChatRole
 import com.kiq.aicp.domain.model.MessageStatus
 import com.kiq.aicp.ui.common.Avatar
+import com.kiq.aicp.ui.theme.Dimens
 import com.kiq.aicp.ui.theme.LocalBubbleColors
 import java.io.File
 
@@ -74,6 +83,10 @@ fun MessageRow(
 	attachments: List<MessageAttachmentEntity> = emptyList(),
 	resolveAttachment: (String) -> File = { File(it) },
 	stickerIndex: Map<String, String> = emptyMap(),
+	/** 点了 AI 头像。性格已被删的老消息压根不会触发，所以这里拿到的一定是活着的性格 */
+	onPersonaClick: (PersonaEntity) -> Unit = {},
+	/** 长按气泡。复制、删除这类操作都藏在这后面，气泡上不挂常驻按钮 */
+	onLongPress: () -> Unit = {},
 	onRetry: () -> Unit,
 	onDelete: () -> Unit,
 ) {
@@ -85,35 +98,46 @@ fun MessageRow(
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
-			.padding(horizontal = 12.dp, vertical = 4.dp),
+			.padding(horizontal = Dimens.spaceMd, vertical = Dimens.spaceXs),
 		horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
 		verticalAlignment = Alignment.Top,
 	) {
 		if (!fromUser) {
 			// 性格配了图片头像就显示图，否则回落到 emoji，两者都没有才用名字首字。
 			// 这里跟顶栏、会话列表共用同一个组件，免得出现"列表里是照片、气泡里还是 emoji"
+			//
+			// 点头像看资料卡：性格被删掉的老消息（persona == null）就不给点了，
+			// 没内容可展示，弹个空卡片只会让人以为坏了。clip 必须在 clickable 前面，
+			// 不然水波纹是个方块，圆头像上特别扎眼
 			Avatar(
 				emoji = persona?.avatarEmoji.orEmpty(),
 				imagePath = persona?.avatarPath,
 				fallbackName = persona?.name ?: "?",
 				resolveFile = resolveAttachment,
-				size = 34.dp,
+				size = Dimens.avatarBubble,
+				modifier = if (persona == null) {
+					Modifier
+				} else {
+					Modifier
+						.clip(CircleShape)
+						.clickable { onPersonaClick(persona) }
+				},
 			)
 		}
 
 		Column(
 			modifier = Modifier
-				.padding(horizontal = 8.dp)
-				.widthIn(max = 300.dp),
+				.padding(horizontal = Dimens.spaceSm)
+				.widthIn(max = Dimens.bubbleMaxWidth),
 			horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start,
-			verticalArrangement = Arrangement.spacedBy(4.dp),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
 		) {
 			if (!fromUser && showSpeakerName) {
 				Text(
 					text = persona?.name ?: "已删除的性格",
 					style = MaterialTheme.typography.labelMedium,
 					color = MaterialTheme.colorScheme.outline,
-					modifier = Modifier.padding(start = 4.dp),
+					modifier = Modifier.padding(start = Dimens.spaceXs),
 				)
 			}
 
@@ -137,11 +161,13 @@ fun MessageRow(
 				Box(
 					modifier = Modifier
 						.clip(
+							// 三个角走标尺，靠说话人那一侧收成尖角 —— 气泡的朝向全靠这一个角，
+							// 四个角一样圆就分不出谁在说话了
 							RoundedCornerShape(
-								topStart = if (fromUser) 16.dp else 4.dp,
-								topEnd = if (fromUser) 4.dp else 16.dp,
-								bottomStart = 16.dp,
-								bottomEnd = 16.dp,
+								topStart = if (fromUser) Dimens.radiusBubble else BUBBLE_TAIL_RADIUS,
+								topEnd = if (fromUser) BUBBLE_TAIL_RADIUS else Dimens.radiusBubble,
+								bottomStart = Dimens.radiusBubble,
+								bottomEnd = Dimens.radiusBubble,
 							),
 						)
 						.background(
@@ -151,7 +177,20 @@ fun MessageRow(
 								else -> bubbles.ai
 							},
 						)
-						.padding(horizontal = 12.dp, vertical = 8.dp),
+						// 长按才出操作菜单：气泡上挂常驻的复制/删除按钮会把界面塞满，
+						// 而这两个操作的使用频率远低于"读消息"本身。
+						// 流式输出中的消息不给长按 —— 那时文本还在变，复制到的是半截话
+						.then(
+							if (streaming) {
+								Modifier
+							} else {
+								Modifier.combinedClickable(
+									onClick = {},
+									onLongClick = onLongPress,
+								)
+							},
+						)
+						.padding(horizontal = Dimens.spaceMd, vertical = Dimens.spaceSm),
 				) {
 					val body = displayText.ifEmpty { if (streaming) "…" else "(空)" }
 					StickerText(
@@ -202,7 +241,7 @@ private fun SentImage(file: File, entity: MessageAttachmentEntity) {
 		modifier = Modifier
 			.width(widthDp)
 			.height(widthDp / ratio)
-			.clip(RoundedCornerShape(12.dp))
+			.clip(RoundedCornerShape(Dimens.radiusCard))
 			.background(MaterialTheme.colorScheme.surfaceVariant),
 		contentAlignment = Alignment.Center,
 	) {
@@ -226,11 +265,11 @@ private fun SentFileCard(entity: MessageAttachmentEntity) {
 	Row(
 		modifier = Modifier
 			.widthIn(max = 260.dp)
-			.clip(RoundedCornerShape(12.dp))
+			.clip(RoundedCornerShape(Dimens.radiusCard))
 			.background(MaterialTheme.colorScheme.surfaceVariant)
-			.padding(horizontal = 12.dp, vertical = 10.dp),
+			.padding(horizontal = Dimens.spaceMd, vertical = Dimens.spaceSm),
 		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.spacedBy(10.dp),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 	) {
 		Icon(
 			painter = painterResource(R.drawable.ic_file),
@@ -259,8 +298,10 @@ private fun SentFileCard(entity: MessageAttachmentEntity) {
 
 /**
  * 待发附件预览条。横向滚动，每项右上角一个叉。
- * 图片额外给一个"当截图读"的开关：满屏是字的图需要更高分辨率，
- * 但那档更贵，所以不默认开，交给用户点。
+ *
+ * 图片左下角那个「截图」角标标的是走了截图档（更高分辨率、detail:high）的图。
+ * 手动选截图的菜单项已经撤了，所以现在实际看不到它；角标先留着，
+ * 等以后按图片内容自动判别接上，用户还是得知道这张走的是哪一档。
  */
 @Composable
 fun PendingAttachmentStrip(
@@ -274,8 +315,8 @@ fun PendingAttachmentStrip(
 		modifier = Modifier
 			.fillMaxWidth()
 			.horizontalScroll(rememberScrollState())
-			.padding(horizontal = 12.dp, vertical = 4.dp),
-		horizontalArrangement = Arrangement.spacedBy(8.dp),
+			.padding(horizontal = Dimens.spaceMd, vertical = Dimens.spaceXs),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 	) {
 		attachments.forEach { item ->
 			Box {
@@ -283,8 +324,8 @@ fun PendingAttachmentStrip(
 					val bitmap by rememberLocalImage(resolveAttachment(item.saved.localPath), 240)
 					Box(
 						modifier = Modifier
-							.size(72.dp)
-							.clip(RoundedCornerShape(10.dp))
+							.size(ATTACHMENT_THUMB_SIZE)
+							.clip(RoundedCornerShape(Dimens.radiusSmall))
 							.background(MaterialTheme.colorScheme.surfaceVariant),
 						contentAlignment = Alignment.Center,
 					) {
@@ -292,7 +333,7 @@ fun PendingAttachmentStrip(
 							Image(
 								bitmap = it,
 								contentDescription = item.saved.fileName,
-								modifier = Modifier.size(72.dp),
+								modifier = Modifier.size(ATTACHMENT_THUMB_SIZE),
 								contentScale = ContentScale.Crop,
 							)
 						}
@@ -301,7 +342,7 @@ fun PendingAttachmentStrip(
 								modifier = Modifier
 									.align(Alignment.BottomStart)
 									.background(MaterialTheme.colorScheme.primary)
-									.padding(horizontal = 4.dp),
+									.padding(horizontal = Dimens.spaceXs),
 							) {
 								Text(
 									text = "截图",
@@ -314,12 +355,12 @@ fun PendingAttachmentStrip(
 				} else {
 					Column(
 						modifier = Modifier
-							.widthIn(min = 72.dp, max = 140.dp)
-							.heightIn(min = 72.dp)
-							.clip(RoundedCornerShape(10.dp))
+							.widthIn(min = ATTACHMENT_THUMB_SIZE, max = 140.dp)
+							.heightIn(min = ATTACHMENT_THUMB_SIZE)
+							.clip(RoundedCornerShape(Dimens.radiusSmall))
 							.background(MaterialTheme.colorScheme.surfaceVariant)
-							.padding(8.dp),
-						verticalArrangement = Arrangement.spacedBy(2.dp),
+							.padding(Dimens.spaceSm),
+						verticalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
 					) {
 						Icon(
 							painter = painterResource(R.drawable.ic_file),
@@ -348,7 +389,9 @@ fun PendingAttachmentStrip(
 					modifier = Modifier
 						.align(Alignment.TopEnd)
 						.size(22.dp)
-						.background(MaterialTheme.colorScheme.scrim, RoundedCornerShape(11.dp)),
+						// 原来这里写的是 RoundedCornerShape(11.dp)，也就是手算的"半径等于一半"，
+						// 改 CircleShape 之后跟着尺寸走，以后调大小不会变成圆角方块
+						.background(MaterialTheme.colorScheme.scrim, CircleShape),
 				) {
 					Icon(
 						painter = painterResource(R.drawable.ic_close),
@@ -372,6 +415,10 @@ fun ChatInputBar(
 	onInputChange: (String) -> Unit,
 	onSend: () -> Unit,
 	onStop: () -> Unit,
+	/**
+	 * 拉起相册。textHeavy 这一档现在恒为 false —— 菜单里那个「截图」项撤了，
+	 * 参数留着是给"将来按图片内容自动判别"用的，别顺手删。
+	 */
 	onPickImage: (textHeavy: Boolean) -> Unit,
 	onPickFile: () -> Unit,
 	onToggleStickerPanel: () -> Unit,
@@ -379,9 +426,9 @@ fun ChatInputBar(
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
-			.padding(horizontal = 8.dp, vertical = 8.dp),
+			.padding(horizontal = Dimens.spaceSm, vertical = Dimens.spaceSm),
 		verticalAlignment = Alignment.Bottom,
-		horizontalArrangement = Arrangement.spacedBy(2.dp),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceXs),
 	) {
 		var menuOpen by remember { mutableStateOf(false) }
 
@@ -395,18 +442,15 @@ fun ChatInputBar(
 			}
 
 			DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+				// 这里原来还夹着一项「截图（图里字多，看得更清）」，现在只剩图片和文件两项：
+				// 让用户自己判断"这张算不算截图"本来就为难人，两档的差别他也看不出来。
+				// 底层没动（AttachmentStore 的截图档、ImageScalePolicy 的 detail:high 都还在），
+				// onPickImage 的 textHeavy 也留着，将来自动判别时直接从这里传值
 				DropdownMenuItem(
 					text = { Text("图片") },
 					onClick = {
 						menuOpen = false
 						onPickImage(false)
-					},
-				)
-				DropdownMenuItem(
-					text = { Text("截图（图里字多，看得更清）") },
-					onClick = {
-						menuOpen = false
-						onPickImage(true)
 					},
 				)
 				DropdownMenuItem(
@@ -434,7 +478,7 @@ fun ChatInputBar(
 			modifier = Modifier.weight(1f),
 			placeholder = { Text("说点什么…") },
 			maxLines = 5,
-			shape = RoundedCornerShape(20.dp),
+			shape = RoundedCornerShape(Dimens.radiusPill),
 		)
 
 		FilledIconButton(
@@ -473,9 +517,9 @@ fun StickerPanel(
 			Column(
 				modifier = Modifier
 					.fillMaxWidth()
-					.padding(24.dp),
+					.padding(Dimens.spaceXl),
 				horizontalAlignment = Alignment.CenterHorizontally,
-				verticalArrangement = Arrangement.spacedBy(6.dp),
+				verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 			) {
 				Text("还没有表情", style = MaterialTheme.typography.titleSmall)
 				Text(
@@ -492,16 +536,16 @@ fun StickerPanel(
 		LazyVerticalGrid(
 			columns = GridCells.Fixed(5),
 			modifier = Modifier.fillMaxWidth(),
-			contentPadding = PaddingValues(8.dp),
-			horizontalArrangement = Arrangement.spacedBy(6.dp),
-			verticalArrangement = Arrangement.spacedBy(6.dp),
+			contentPadding = PaddingValues(Dimens.spaceSm),
+			horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
+			verticalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 		) {
 			items(stickers, key = { it.id }) { sticker ->
 				val bitmap by rememberLocalImage(resolveFile(sticker.localPath), 180)
 				Box(
 					modifier = Modifier
 						.aspectRatio(1f)
-						.clip(RoundedCornerShape(8.dp))
+						.clip(RoundedCornerShape(Dimens.radiusSmall))
 						.background(MaterialTheme.colorScheme.surface)
 						.clickable { onPick(sticker.label) },
 					contentAlignment = Alignment.Center,
@@ -528,21 +572,47 @@ fun StickerPanel(
 	}
 }
 
+/** 时间分割线。居中一行小字，不画横线 —— 横线会把消息流切得很碎 */
 @Composable
-fun ThinkingHint(personaName: String) {
+fun TimeDivider(text: String) {
 	Row(
 		modifier = Modifier
 			.fillMaxWidth()
-			.padding(horizontal = 16.dp, vertical = 4.dp),
+			.padding(vertical = Dimens.spaceSm),
+		horizontalArrangement = Arrangement.Center,
+	) {
+		Text(
+			text = text,
+			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.outline,
+		)
+	}
+}
+
+@Composable
+fun ThinkingHint(personaName: String) {	Row(
+		modifier = Modifier
+			.fillMaxWidth()
+			.padding(horizontal = Dimens.spaceLg, vertical = Dimens.spaceXs),
 		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.spacedBy(8.dp),
+		horizontalArrangement = Arrangement.spacedBy(Dimens.spaceSm),
 	) {
 		CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
 		Text(
 			text = "$personaName 正在想…",
-			style = MaterialTheme.typography.labelMedium,
+			// 状态类小字跟附件大小、文件字数那些统一走 labelSmall + outline：
+			// 它是过程提示，不该跟正文抢注意力
+			style = MaterialTheme.typography.labelSmall,
 			color = MaterialTheme.colorScheme.outline,
 			textAlign = TextAlign.Start,
 		)
 	}
 }
+
+// 气泡尖角那一档故意没进 Dimens：全局最小圆角是 8dp，用在这儿已经圆到看不出朝向了，
+// 而这个值只有气泡一处用得上，塞进标尺反而会被别处误用
+private val BUBBLE_TAIL_RADIUS = 4.dp
+
+// 待发附件的缩略图边长。跟 Dimens.avatarLarge 恰好都是 72dp，但那是巧合 ——
+// 它是缩略图不是头像，哪天头像改大了这里不该跟着动
+private val ATTACHMENT_THUMB_SIZE = 72.dp

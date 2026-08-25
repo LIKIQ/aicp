@@ -14,12 +14,14 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.kiq.aicp.data.attach.AttachmentStore
 import com.kiq.aicp.data.attach.BuiltInStickers
 import com.kiq.aicp.data.attach.TextExtractor
+import com.kiq.aicp.data.backup.BackupManager
 import com.kiq.aicp.data.db.AicpDatabase
 import com.kiq.aicp.data.prefs.KeystoreCipher
 import com.kiq.aicp.data.prefs.SettingsStore
 import com.kiq.aicp.data.remote.LlmConfig
 import com.kiq.aicp.data.remote.LlmProvider
 import com.kiq.aicp.data.remote.OpenAiCompatProvider
+import com.kiq.aicp.data.remote.UpdateChecker
 import com.kiq.aicp.data.repo.ChatRepository
 import com.kiq.aicp.data.repo.ConversationRepository
 import com.kiq.aicp.data.repo.MemoryRepository
@@ -28,7 +30,10 @@ import com.kiq.aicp.data.repo.ProactiveRepository
 import com.kiq.aicp.data.repo.StickerRepository
 import com.kiq.aicp.domain.memory.ContextBuilder
 import com.kiq.aicp.domain.memory.MemoryCompressor
+import com.kiq.aicp.domain.memory.MemoryLinter
 import com.kiq.aicp.domain.persona.PersonaGenerator
+import com.kiq.aicp.domain.sticker.StickerVision
+import com.kiq.aicp.work.StickerVisionWorker
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
@@ -99,6 +104,41 @@ class AppContainer(context: Context) {
 
 	val personaGenerator: PersonaGenerator by lazy { PersonaGenerator(llmProvider) }
 
+	/** 记忆体检。用户在记忆页手点触发，跟自动压缩共用压缩模型 */
+	val memoryLinter: MemoryLinter by lazy { MemoryLinter(memoryRepository, llmProvider) }
+
+	/** 表情识图。用后台任务逐张跑，跟带图聊天共用视觉模型 */
+	val stickerVision: StickerVision by lazy {
+		StickerVision(stickerRepository, attachmentStore, llmProvider)
+	}
+
+	/**
+	 * 排一次后台识图。
+	 *
+	 * 该在两处调：导入表情成功之后（新图需要分类），以及应用启动时（补上上次没跑完的）。
+	 * 排程放在容器上而不是 StickerRepository 里：仓库是 data 层，不该认识 WorkManager，
+	 * 否则单测里每建一个仓库都要先把 WorkManager 初始化起来。
+	 *
+	 * 重复调用是安全的——同名任务按 KEEP 并入已排的那个，不会叠出好几个任务
+	 * 对同一批图各发一遍请求。没活干时 Worker 查一次库就 success 退出。
+	 */
+	fun scheduleStickerVision() {
+		StickerVisionWorker.enqueue(appContext)
+	}
+
+	/**
+	 * 版本检测。跟 llmProvider 共用 httpClient —— 连接池和线程都省一份，
+	 * 而它自己会把读超时压短（一个 JSON 用不着等 60 秒）。
+	 * 节流状态存在 SettingsStore 里，这里只把读写两个口子接过去。
+	 */
+	val updateChecker: UpdateChecker by lazy {
+		UpdateChecker(
+			baseClient = httpClient,
+			lastCheckAt = { settingsStore.lastUpdateCheckAt() },
+			markChecked = { settingsStore.setLastUpdateCheckAt(it) },
+		)
+	}
+
 	val memoryCompressor: MemoryCompressor by lazy {
 		MemoryCompressor(
 			chatRepository = chatRepository,
@@ -108,4 +148,11 @@ class AppContainer(context: Context) {
 			llmProvider = llmProvider,
 		)
 	}
+
+	/**
+	 * 备份/恢复。by lazy 在这里格外要紧：它一被取用就会连带打开数据库（要做 WAL checkpoint），
+	 * 而开机时的"待恢复搬运"必须发生在库被打开之前 —— 那一步走的是 BackupManager 的静态方法，
+	 * 不碰容器，见 AicpApplication.onCreate。
+	 */
+	val backupManager: BackupManager by lazy { BackupManager(appContext, database, settingsStore) }
 }
