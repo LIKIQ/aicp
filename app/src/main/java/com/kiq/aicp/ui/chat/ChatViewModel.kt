@@ -61,9 +61,12 @@ import com.kiq.aicp.domain.humanize.ProactiveDecider
 import com.kiq.aicp.domain.humanize.ReplySegmenter
 import com.kiq.aicp.domain.sticker.StickerGroupResolver
 import com.kiq.aicp.domain.sticker.StickerParser
+import com.kiq.aicp.domain.websearch.SearchPrompts
+import com.kiq.aicp.domain.websearch.WebSearchService
 import java.io.File
 import java.time.LocalTime
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -226,6 +229,7 @@ class ChatViewModel(
 	private val textExtractor: TextExtractor,
 	private val stickerRepository: StickerRepository,
 	private val proactiveRepository: ProactiveRepository,
+	private val webSearchService: WebSearchService,
 ) : ViewModel() {
 
 	private val transient = MutableStateFlow(Transient())
@@ -549,9 +553,17 @@ class ChatViewModel(
 				// 心情在请求前更新：这样这一轮回复就已经带上"你刚被夸了/被呛了"的状态
 				updateMoodsFor(text, settings)
 
+				// 联网检索跟已读延迟并行跑：判定加搜索少说两三秒，
+				// 让它跟"看一眼再打字"那 900ms 重叠掉一部分，别让用户干等两段
+				val webDeferred = async { runWebSearch(settings) }
+
 				// 已读延迟：真人是"看到消息 → 停一下 → 开始打字"，不是瞬间回
 				val readDelay = settings.humanizeConfig().takeIf { it.enabled }?.readDelayMs ?: 0L
 				if (readDelay > 0) delay(readDelay)
+
+				// 群里几个角色共用这一份检索结果：三个人是同时看到同一条消息，
+				// 不该各自去搜一遍，那样既慢又费钱
+				val webResults = webDeferred.await()
 
 				// 群聊错峰开口：所有角色的协程一起启动（互不阻塞、气泡可以同时在流），
 				// 但第 i 个角色进 streamOneReply 之前先压一段。ContextBuilder.build 是
@@ -562,7 +574,7 @@ class ChatViewModel(
 				val roundReplyJobs = speakers.mapIndexed { index, persona ->
 					launch {
 						if (stagger > 0 && index > 0) delay(stagger * index)
-						streamOneReply(persona, settings)
+						streamOneReply(persona, settings, webResults = webResults)
 					}.also { replyJobs += it }
 				}
 				joinAll(*roundReplyJobs.toTypedArray())
@@ -639,6 +651,40 @@ class ChatViewModel(
 		transient.update { it.copy(sending = activeReplyCount > 0) }
 	}
 
+	/**
+	 * 这轮要不要联网、搜到了什么，全交给 WebSearchService 判断。
+	 * 返回空串表示没搜或者没搜到，上下文里就不会出现那一段。
+	 *
+	 * 整个过程对界面完全隐形：不建消息、不改状态、失败只写日志。
+	 * 搜索是帮它答得准一点，不是一个要向用户汇报的功能。
+	 */
+	private suspend fun runWebSearch(settings: AicpSettings): String = runCatching {
+		val tail = buildSearchTail()
+		if (tail.isEmpty()) return ""
+		val outcome = webSearchService.run(tail, settings)
+		webSearchService.compose(outcome)
+	}.onFailure { Log.w(TAG, "联网检索这一步整体失败，按不搜处理", it) }.getOrDefault("")
+
+	/** 判定器要看的对话尾部。每条压成一行"谁：说了什么"，太长的截掉 */
+	private suspend fun buildSearchTail(): List<String> {
+		val recent = chatRepository
+			.recentRaw(conversationId, SearchPrompts.CONTEXT_MESSAGES)
+			.reversed()
+		if (recent.isEmpty()) return emptyList()
+
+		val names = uiState.value.participants.associate { it.id to it.name }
+		return recent.mapNotNull { message ->
+			val who = when (message.role) {
+				ChatRole.USER -> "用户"
+				ChatRole.ASSISTANT -> names[message.personaId] ?: "对方"
+				// system 消息是给模型的指令，不是对话内容，拿它判定只会添乱
+				else -> return@mapNotNull null
+			}
+			val body = message.content.replace('\n', ' ').trim().take(TAIL_LINE_CHARS)
+			if (body.isEmpty()) null else "$who：$body"
+		}
+	}
+
 	private suspend fun pickSpeakers(userText: String, settings: AicpSettings): List<PersonaEntity> {
 		val refs = conversationRepository.participants(conversationId)
 		if (refs.isEmpty()) return emptyList()
@@ -676,6 +722,8 @@ class ChatViewModel(
 		persona: PersonaEntity,
 		settings: AicpSettings,
 		extraInstruction: String? = null,
+		/** 这轮联网搜到的内容，群里几个角色共用同一份。空串表示没搜 */
+		webResults: String = "",
 	): Boolean {
 		val mates = uiState.value.participants.filter { it.id != persona.id }
 		val context = contextBuilder.build(
@@ -684,6 +732,7 @@ class ChatViewModel(
 			settings = settings,
 			groupMates = mates,
 			mood = currentMoodOf(persona.id, settings),
+			webResults = webResults,
 		)
 		memoryRepository.markCardsUsed(context.usedCardIds)
 
@@ -1172,6 +1221,9 @@ class ChatViewModel(
 		/** 空闲哨兵的轮询间隔。一分钟一次足够，主动搭话的阈值是按小时算的 */
 		private const val IDLE_CHECK_INTERVAL_MS = 60_000L
 
+		/** 判定器看的每行对话最多留多少字。它只需要知道大意，不需要全文 */
+		private const val TAIL_LINE_CHARS = 200
+
 		/**
 		 * 群聊错峰开口的间隔。关掉真人模拟时也留一点，否则同一秒 build 出来的
 		 * 上下文完全一样，几个角色会同时回同一句话、彼此当没听见。
@@ -1194,6 +1246,7 @@ class ChatViewModel(
 				textExtractor = c.textExtractor,
 				stickerRepository = c.stickerRepository,
 				proactiveRepository = c.proactiveRepository,
+				webSearchService = c.webSearchService,
 			)
 		}
 

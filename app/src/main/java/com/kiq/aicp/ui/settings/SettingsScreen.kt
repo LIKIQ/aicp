@@ -1,5 +1,5 @@
 // app/src/main/java/com/kiq/aicp/ui/settings/SettingsScreen.kt
-// 设置页：接口配置、记忆与压缩调优、表情包、真人模拟、主动搭话、外观、备份与恢复、说明。
+// 设置页：接口配置、联网搜索、记忆与压缩调优、表情包、真人模拟、主动搭话、外观、备份与恢复、说明。
 //
 // 接口那三项走草稿 + 保存；压缩参数是即时生效的滑块（松手才写盘，见 SettingsComponents）。
 // API Key 输入框永远不回填已保存的值，只在 supportingText 里给脱敏提示 ——
@@ -160,6 +160,7 @@ fun SettingsScreen(
 			verticalArrangement = Arrangement.spacedBy(Dimens.spaceLg),
 		) {
 			item { EndpointSection(state, viewModel) }
+			item { WebSearchSection(state, viewModel) }
 			item { MemorySection(state, viewModel, onOpenMemory) }
 			item { StickerSection(onOpenStickers) }
 			item { AppearanceSection(state, viewModel) }
@@ -320,6 +321,74 @@ private fun EndpointSection(state: SettingsUiState, viewModel: SettingsViewModel
 			}
 
 			null -> Unit
+		}
+	}
+}
+
+/**
+ * 联网搜索分区。
+ *
+ * 细项照 HumanizeSection 的做法藏在总开关后面：关掉之后 WebSearchService 直接返回 Empty，
+ * 那几个滑块调了也不生效。
+ */
+@Composable
+private fun WebSearchSection(state: SettingsUiState, viewModel: SettingsViewModel) {
+	val s = state.settings
+
+	SectionCard(
+		title = "联网搜索",
+		subtitle = "模型自己判断这句话要不要查资料，要查就走必应的免 key 接口搜一下。" +
+			"搜到的东西只作为背景塞进上下文，聊天界面上看不出来",
+	) {
+		SwitchRow(
+			title = "让模型自己决定要不要搜",
+			subtitle = "关掉之后完全不联网。开着的代价是每条消息多一次判定调用，走的是压缩模型",
+			checked = s.webSearchEnabled,
+			onCheckedChange = viewModel::setWebSearchEnabled,
+		)
+
+		if (s.webSearchEnabled) {
+			SliderRow(
+				title = "取几条结果",
+				subtitle = "只取搜索页给的标题和摘要，条数多了主要是把预算吃光，不一定更准",
+				value = s.webSearchResultCount,
+				valueRange = 1..10,
+				step = 1,
+				valueLabel = { "$it 条" },
+				onValueSettled = { viewModel.setWebSearchResultCount(it) },
+			)
+
+			SliderRow(
+				title = "抓几篇正文",
+				subtitle = "抓正文更准但更慢，每篇都是一次额外请求；抓不到就退回用摘要，" +
+					"设成 0 则完全不抓",
+				value = s.webSearchFetchPages,
+				valueRange = 0..2,
+				step = 1,
+				valueLabel = { if (it == 0) "只用摘要" else "$it 篇" },
+				onValueSettled = { viewModel.setWebSearchFetchPages(it) },
+			)
+
+			SliderRow(
+				title = "每篇留多少字",
+				subtitle = "正文按相关段落截取，留太少会把结论切掉",
+				value = s.webSearchPageChars,
+				valueRange = 200..2_000,
+				step = 100,
+				valueLabel = { "$it 字" },
+				onValueSettled = { viewModel.setWebSearchPageChars(it) },
+			)
+
+			SliderRow(
+				title = "这段占多少预算",
+				subtitle = "搜索结果最多占上下文的这么多 token，超出的部分会被裁掉，" +
+					"给得越多留给对话历史的就越少",
+				value = s.webSearchBudgetTokens,
+				valueRange = 300..4_000,
+				step = 100,
+				valueLabel = { "$it token" },
+				onValueSettled = { viewModel.setWebSearchBudgetTokens(it) },
+			)
 		}
 	}
 }

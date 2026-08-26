@@ -13,6 +13,7 @@ import com.kiq.aicp.data.db.entity.MemoryEntryEntity
 import com.kiq.aicp.data.db.entity.MessageEntity
 import com.kiq.aicp.domain.model.ChatRole
 import com.kiq.aicp.domain.model.MemoryCardType
+import com.kiq.aicp.domain.util.LenientJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -349,18 +350,8 @@ object CompressionPrompts {
 		)
 	}
 
-	private fun stripCodeFence(text: String): String {		if (!text.startsWith("```")) return text
-		return text.removePrefix("```json")
-			.removePrefix("```JSON")
-			.removePrefix("```")
-			.removeSuffix("```")
-			.trim()
-	}
+	private fun stripCodeFence(text: String): String = LenientJson.stripCodeFence(text)
 
 	/** 模型爱在 JSON 前后加话，掐头去尾只取第一个 { 到最后一个 } */
-	private fun extractJsonObject(text: String): String? {
-		val start = text.indexOf('{')
-		val end = text.lastIndexOf('}')
-		return if (start >= 0 && end > start) text.substring(start, end + 1) else null
-	}
+	private fun extractJsonObject(text: String): String? = LenientJson.extractObject(text)
 }

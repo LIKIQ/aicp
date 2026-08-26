@@ -56,6 +56,11 @@ object ConfigDiff {
 		Field("免打扰终点") { "${it.quietHoursEnd} 点" },
 		Field("保持后台运行") { onOff(it.keepAliveEnabled) },
 		Field("记忆规则") { blankAs(it.memorySchema.take(20), "没写") },
+		Field("联网搜索") { onOff(it.webSearchEnabled) },
+		Field("搜索结果条数") { "${it.webSearchResultCount} 条" },
+		Field("抓正文篇数") { if (it.webSearchFetchPages == 0) "只用摘要" else "${it.webSearchFetchPages} 篇" },
+		Field("每篇正文字数") { "${it.webSearchPageChars} 字" },
+		Field("搜索结果预算") { "${it.webSearchBudgetTokens} token" },
 		Field("跟随系统取色") { onOff(it.dynamicColor) },
 	)
 

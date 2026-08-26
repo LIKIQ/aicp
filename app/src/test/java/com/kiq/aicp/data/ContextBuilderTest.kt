@@ -5,6 +5,8 @@
 // 1. 群聊里别人说过的话必须转成 user + 【名字】前缀。当成 assistant 塞进去，
 //    模型会以为那些是自己说的，然后开始模仿别人的语气 —— 这个 bug 在 UI 上很难看出来。
 // 2. 预算再小也要留住最后两条原文，否则模型收到的是一堆摘要加一句没有上文的话。
+// 3. 联网搜到的那段有独立预算，超了按行砍尾巴。它是唯一由外部内容决定长度的部分，
+//    不先扣预算就砍，长对话遇上长网页正文会把历史挤没，表现成"它突然不记得刚才说的话"。
 
 package com.kiq.aicp.data
 
@@ -21,6 +23,7 @@ import com.kiq.aicp.domain.memory.ParsedEntry
 import com.kiq.aicp.domain.model.AicpSettings
 import com.kiq.aicp.domain.model.ChatRole
 import com.kiq.aicp.domain.model.MemoryCardType
+import com.kiq.aicp.domain.websearch.WebSearchComposer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -249,5 +252,143 @@ class ContextBuilderTest {
 
 		// 估算器本身有偏差，留 20% 余量，但不能出现成倍超标
 		assertTrue("实际 ${built.estimatedTokens} 超过预算 $budget 太多", built.estimatedTokens <= budget * 1.2)
+	}
+
+	// ---------------- 联网搜到的那一段 ----------------
+
+	/** 照 WebSearchComposer 的形状拼一段，头一行是它的段落标题，后面每行一条内容 */
+	private fun webBlock(bodyLines: List<String>): String =
+		(listOf("${WebSearchComposer.SECTION_TITLE}（2026-08-26 搜的「北京 天气」）") + bodyLines)
+			.joinToString("\n")
+
+	@Test
+	fun `没搜的时候系统提示词里一个字都不加`() = runTest {
+		val persona = seedPersonas().first()
+		val convId = conversations.createSingle(persona.id)
+		chat.appendUser(convId, "在吗")
+
+		val built = builder.build(convId, persona, settings, webResults = "")
+		val system = built.messages.first().content
+
+		assertFalse("没搜却出现了搜索段的标题", system.contains(WebSearchComposer.SECTION_TITLE))
+		assertFalse(system.contains("刚从搜索引擎拿到"))
+	}
+
+	@Test
+	fun `搜到的内容会拼进系统提示词`() = runTest {
+		val persona = seedPersonas().first()
+		val convId = conversations.createSingle(persona.id)
+		chat.appendUser(convId, "北京今天天气怎么样")
+
+		val web = webBlock(listOf("## 北京天气预报", "今天白天多云，最高气温 26℃", "（来源：tianqi.com）"))
+		val built = builder.build(convId, persona, settings, webResults = web)
+		val system = built.messages.first().content
+
+		assertTrue(system.contains(WebSearchComposer.SECTION_TITLE))
+		assertTrue(system.contains("今天白天多云，最高气温 26℃"))
+		assertTrue(system.contains("（来源：tianqi.com）"))
+		// 人设仍然排在最前面，搜索段是接在后面的
+		assertTrue(system.startsWith(persona.systemPrompt.take(10)))
+	}
+
+	@Test
+	fun `网上信息超预算时按行砍尾巴，历史消息一条都不少`() = runTest {
+		val persona = seedPersonas().first()
+		val convId = conversations.createSingle(persona.id)
+		repeat(6) { chat.appendUser(convId, "第 $it 句话，随便聊点什么") }
+
+		// 结果条数和每篇字数都是用户可调的，两个拉满这段能顶到几千 token。
+		// 这里刻意造一份超量的，再把它自己的预算压到 300，逼 clampWebResults 动手
+		val lastLine = "这是最后一行，超预算之后它必须被砍掉。"
+		val body = (1..60).map { "第${it}行：北京今天最高气温 ${it}℃，湿度 ${it}%，风力 ${it} 级。" }
+		val web = webBlock(body + lastLine)
+
+		val built = builder.build(
+			convId,
+			persona,
+			settings.copy(webSearchBudgetTokens = 300),
+			webResults = web,
+		)
+		val system = built.messages.first().content
+
+		assertTrue("头一行被砍掉了，模型就不知道这批内容是搜来的", system.contains(WebSearchComposer.SECTION_TITLE))
+		assertTrue("砍得太狠，前几行都没留下", system.contains(body.first()))
+		assertFalse("尾巴没砍掉，超预算的内容原样进了提示词", system.contains(lastLine))
+		assertFalse("倒数几行也该在预算外", system.contains(body.last()))
+
+		// 重点：网页内容挤掉的是自己那份预算，不是对话历史
+		assertTrue("历史被网页内容挤没了，只剩 ${built.messages.size} 条", built.messages.size > 1)
+		assertTrue("最后一条原文没留住", built.messages.last().content.contains("第 5 句话"))
+		assertTrue("带的原文太少：${built.recentMessageCount} 条", built.recentMessageCount >= 2)
+	}
+
+	@Test
+	fun `网上信息没超预算时原样保留`() = runTest {
+		val persona = seedPersonas().first()
+		val convId = conversations.createSingle(persona.id)
+		chat.appendUser(convId, "北京今天天气怎么样")
+
+		val web = webBlock(
+			listOf(
+				"## 北京天气预报 - 天气网",
+				"今天白天多云，最高气温 26℃，最低气温 15℃",
+				"空气质量：优 湿度：75% 风向：北风 2级",
+				"（来源：tianqi.com）",
+			),
+		)
+
+		val built = builder.build(
+			convId,
+			persona,
+			settings.copy(webSearchBudgetTokens = 1_500),
+			webResults = web,
+		)
+		val system = built.messages.first().content
+
+		assertTrue("没超预算却被动了刀", system.contains(web))
+		assertTrue(system.contains("（来源：tianqi.com）"))
+	}
+
+	/**
+	 * 防回归：一条超长正文不许把后面几条短摘要一起挡在门外。
+	 *
+	 * PassagePicker 有条"一行都装不下就截一刀"的分支，能吐出单行两千字的正文。
+	 * 早先 clampWebResults 是按行装的，装到这一行就 break，结果只剩个空的
+	 * `## 标题` 头，后面明明装得下的摘要全丢了 —— 给模型一个"我查到了"的空壳
+	 * 比什么都不给更糟，它会顺着标题自己编内容。
+	 */
+	@Test
+	fun `超长的第一条正文被跳过，后面的短摘要照样进上下文`() = runTest {
+		val persona = seedPersonas().first()
+		val convId = conversations.createSingle(persona.id)
+		chat.appendUser(convId, "北京今天天气怎么样")
+
+		val web = webBlock(
+			listOf(
+				"## 第一条 正文超长的那个",
+				"北京今天最高气温 26℃。".repeat(200),
+				"（来源：huge.example.com）",
+				"## 第二条 只有摘要",
+				"空气质量：优 湿度：75% 风向：北风 2级",
+				"（来源：tianqi.com）",
+				"## 第三条 也只有摘要",
+				"明天转晴，最高 28℃",
+				"（来源：weather.com.cn）",
+			),
+		)
+
+		val built = builder.build(
+			convId,
+			persona,
+			settings.copy(webSearchBudgetTokens = 300),
+			webResults = web,
+		)
+		val system = built.messages.first().content
+
+		assertTrue("标题头必须留着", system.contains(WebSearchComposer.SECTION_TITLE))
+		assertFalse("超长正文该被整块跳过", system.contains("北京今天最高气温 26℃。".repeat(50)))
+		assertTrue("被长正文挡住了，第二条摘要没进来", system.contains("空气质量：优 湿度：75%"))
+		assertTrue("第三条摘要也该进来", system.contains("明天转晴，最高 28℃"))
+		assertTrue("历史被挤没了", built.messages.size > 1)
 	}
 }

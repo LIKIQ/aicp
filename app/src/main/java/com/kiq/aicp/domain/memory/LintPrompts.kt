@@ -13,6 +13,7 @@
 package com.kiq.aicp.domain.memory
 
 import com.kiq.aicp.data.db.entity.MemoryEntryEntity
+import com.kiq.aicp.domain.util.LenientJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -235,18 +236,7 @@ object LintPrompts {
 
 	private fun empty() = ParsedLint(emptyList(), emptyList(), emptyList(), emptyList(), strict = false)
 
-	private fun stripCodeFence(text: String): String {
-		if (!text.startsWith("```")) return text
-		return text.removePrefix("```json")
-			.removePrefix("```JSON")
-			.removePrefix("```")
-			.removeSuffix("```")
-			.trim()
-	}
+	private fun stripCodeFence(text: String): String = LenientJson.stripCodeFence(text)
 
-	private fun extractJsonObject(text: String): String? {
-		val start = text.indexOf('{')
-		val end = text.lastIndexOf('}')
-		return if (start >= 0 && end > start) text.substring(start, end + 1) else null
-	}
+	private fun extractJsonObject(text: String): String? = LenientJson.extractObject(text)
 }

@@ -240,6 +240,32 @@ class SettingsStore(
 		dataStore.edit { it[KEY_KEEP_ALIVE] = enabled }
 	}
 
+	suspend fun setWebSearchEnabled(enabled: Boolean) {
+		dataStore.edit { it[KEY_WEB_SEARCH_ENABLED] = enabled }
+	}
+
+	/**
+	 * 联网搜索的几个量。上下界跟 ConfigCodec.toSettings 那边保持一致，
+	 * 两处对不上的话同一个值"手填"和"导入"会得到不同结果。
+	 *
+	 * 抓正文那一项允许 0：只吃摘要虽然糙，但省掉几个 HTTP 往返，网差的时候是唯一能用的档。
+	 */
+	suspend fun setWebSearchResultCount(count: Int) {
+		dataStore.edit { it[KEY_WEB_SEARCH_RESULTS] = count.coerceIn(1, 10) }
+	}
+
+	suspend fun setWebSearchFetchPages(pages: Int) {
+		dataStore.edit { it[KEY_WEB_SEARCH_PAGES] = pages.coerceIn(0, 2) }
+	}
+
+	suspend fun setWebSearchPageChars(chars: Int) {
+		dataStore.edit { it[KEY_WEB_SEARCH_PAGE_CHARS] = chars.coerceIn(200, 2_000) }
+	}
+
+	suspend fun setWebSearchBudgetTokens(tokens: Int) {
+		dataStore.edit { it[KEY_WEB_SEARCH_BUDGET] = tokens.coerceIn(300, 4_000) }
+	}
+
 	suspend fun setMemoryTuning(
 		contextBudgetTokens: Int? = null,
 		keepRecentMessages: Int? = null,
@@ -313,6 +339,11 @@ class SettingsStore(
 			prefs[KEY_QUIET_END] = settings.quietHoursEnd
 			prefs[KEY_KEEP_ALIVE] = settings.keepAliveEnabled
 			prefs[KEY_MEMORY_SCHEMA] = settings.memorySchema.take(MAX_MEMORY_SCHEMA)
+			prefs[KEY_WEB_SEARCH_ENABLED] = settings.webSearchEnabled
+			prefs[KEY_WEB_SEARCH_RESULTS] = settings.webSearchResultCount
+			prefs[KEY_WEB_SEARCH_PAGES] = settings.webSearchFetchPages
+			prefs[KEY_WEB_SEARCH_PAGE_CHARS] = settings.webSearchPageChars
+			prefs[KEY_WEB_SEARCH_BUDGET] = settings.webSearchBudgetTokens
 			prefs[KEY_DYNAMIC_COLOR] = settings.dynamicColor
 
 			// 导入的这份配置说了要不要记住，就按它来：勾着才写密文，没勾就把旧密文清掉
@@ -359,6 +390,11 @@ class SettingsStore(
 			quietHoursEnd = this[KEY_QUIET_END] ?: defaults.quietHoursEnd,
 			keepAliveEnabled = this[KEY_KEEP_ALIVE] ?: defaults.keepAliveEnabled,
 			memorySchema = this[KEY_MEMORY_SCHEMA] ?: defaults.memorySchema,
+			webSearchEnabled = this[KEY_WEB_SEARCH_ENABLED] ?: defaults.webSearchEnabled,
+			webSearchResultCount = this[KEY_WEB_SEARCH_RESULTS] ?: defaults.webSearchResultCount,
+			webSearchFetchPages = this[KEY_WEB_SEARCH_PAGES] ?: defaults.webSearchFetchPages,
+			webSearchPageChars = this[KEY_WEB_SEARCH_PAGE_CHARS] ?: defaults.webSearchPageChars,
+			webSearchBudgetTokens = this[KEY_WEB_SEARCH_BUDGET] ?: defaults.webSearchBudgetTokens,
 			dynamicColor = this[KEY_DYNAMIC_COLOR] ?: defaults.dynamicColor,
 		)
 	}
@@ -395,6 +431,11 @@ class SettingsStore(
 		private val KEY_QUIET_END = intPreferencesKey("quiet_hours_end")
 		private val KEY_KEEP_ALIVE = booleanPreferencesKey("keep_alive_enabled")
 		private val KEY_MEMORY_SCHEMA = stringPreferencesKey("memory_schema")
+		private val KEY_WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
+		private val KEY_WEB_SEARCH_RESULTS = intPreferencesKey("web_search_result_count")
+		private val KEY_WEB_SEARCH_PAGES = intPreferencesKey("web_search_fetch_pages")
+		private val KEY_WEB_SEARCH_PAGE_CHARS = intPreferencesKey("web_search_page_chars")
+		private val KEY_WEB_SEARCH_BUDGET = intPreferencesKey("web_search_budget_tokens")
 		private val KEY_DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
 		private val KEY_CONTEXT_BUDGET = intPreferencesKey("context_budget_tokens")
 		private val KEY_KEEP_RECENT = intPreferencesKey("keep_recent_messages")

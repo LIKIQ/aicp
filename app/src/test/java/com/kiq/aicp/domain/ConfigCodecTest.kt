@@ -247,6 +247,28 @@ class ConfigCodecTest {
 	}
 
 	@Test
+	fun `联网搜索那五项往返之后一字不差`() {
+		// 不改上面那份 filled：它的联网搜索几项取的是默认值，默认等于默认，漏映射也断言不出来。
+		// 这里单独给一组非默认值把那条路钉住
+		val webSearch = filled.copy(
+			webSearchEnabled = false,
+			webSearchResultCount = 9,
+			webSearchFetchPages = 2,
+			webSearchPageChars = 1_400,
+			webSearchBudgetTokens = 3_200,
+		)
+
+		val back = ConfigCodec.decode(ConfigCodec.encode(webSearch, password), password)
+
+		assertEquals(false, back.webSearchEnabled)
+		assertEquals(9, back.webSearchResultCount)
+		assertEquals(2, back.webSearchFetchPages)
+		assertEquals(1_400, back.webSearchPageChars)
+		assertEquals(3_200, back.webSearchBudgetTokens)
+		assertEquals(webSearch, back)
+	}
+
+	@Test
 	fun `设置里的每一项都必须在配置码里有位置`() {
 		val settingsFields = instanceFieldsOf(AicpSettings::class.java)
 		val payloadFields = instanceFieldsOf(ConfigPayload::class.java) - "v"

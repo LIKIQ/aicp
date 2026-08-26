@@ -102,6 +102,75 @@ class SettingsStoreTest {
 		assertEquals("", store.current().apiKey)
 	}
 
+	@Test
+	fun `联网搜索的五项都能落盘并读回`() = runTest {
+		val dataStore = MemoryPreferencesDataStore()
+		val store = newStore(dataStore)
+		store.setWebSearchEnabled(false)
+		store.setWebSearchResultCount(8)
+		store.setWebSearchFetchPages(2)
+		store.setWebSearchPageChars(1_200)
+		store.setWebSearchBudgetTokens(2_400)
+
+		val restarted = newStore(dataStore).current()
+		assertFalse(restarted.webSearchEnabled)
+		assertEquals(8, restarted.webSearchResultCount)
+		assertEquals(2, restarted.webSearchFetchPages)
+		assertEquals(1_200, restarted.webSearchPageChars)
+		assertEquals(2_400, restarted.webSearchBudgetTokens)
+	}
+
+	@Test
+	fun `联网搜索的数值项越界时夹回合法范围`() = runTest {
+		val store = newStore(MemoryPreferencesDataStore())
+
+		store.setWebSearchResultCount(0)
+		store.setWebSearchFetchPages(-1)
+		store.setWebSearchPageChars(0)
+		store.setWebSearchBudgetTokens(0)
+		val low = store.current()
+		assertEquals(1, low.webSearchResultCount)
+		assertEquals(0, low.webSearchFetchPages)
+		assertEquals(200, low.webSearchPageChars)
+		assertEquals(300, low.webSearchBudgetTokens)
+
+		store.setWebSearchResultCount(999)
+		store.setWebSearchFetchPages(999)
+		store.setWebSearchPageChars(999_999)
+		store.setWebSearchBudgetTokens(999_999)
+		val high = store.current()
+		assertEquals(10, high.webSearchResultCount)
+		assertEquals(2, high.webSearchFetchPages)
+		assertEquals(2_000, high.webSearchPageChars)
+		assertEquals(4_000, high.webSearchBudgetTokens)
+	}
+
+	@Test
+	fun `导入配置时联网搜索的五项一起跟过来`() = runTest {
+		val dataStore = MemoryPreferencesDataStore()
+		val store = newStore(dataStore)
+
+		// 五项全给非默认值：漏写一项的话默认值等于默认值，断言照样过，测不出来
+		store.applyImported(
+			AicpSettings(
+				baseUrl = "https://api.example.com",
+				model = "m",
+				webSearchEnabled = false,
+				webSearchResultCount = 3,
+				webSearchFetchPages = 0,
+				webSearchPageChars = 900,
+				webSearchBudgetTokens = 800,
+			),
+		)
+
+		val restarted = newStore(dataStore).current()
+		assertFalse(restarted.webSearchEnabled)
+		assertEquals(3, restarted.webSearchResultCount)
+		assertEquals(0, restarted.webSearchFetchPages)
+		assertEquals(900, restarted.webSearchPageChars)
+		assertEquals(800, restarted.webSearchBudgetTokens)
+	}
+
 	private fun newStore(dataStore: DataStore<Preferences>): SettingsStore =
 		SettingsStore(dataStore, TestCipher)
 

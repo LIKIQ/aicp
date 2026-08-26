@@ -476,6 +476,21 @@ class SettingsViewModel(
 	 */
 	fun setKeepAlive(enabled: Boolean) = launchStore { setKeepAliveEnabled(enabled) }
 
+	/**
+	 * 联网搜索的几项。跟真人模拟那套不同，这里是一项一个方法而不是一个带 null 参数的打包方法：
+	 * 它们之间没有联动（关了总开关也不用把别的置回默认），打包只会让每次调用都得数参数位置。
+	 * 边界一律在 SettingsStore 那边夹，UI 只负责给出滑块范围。
+	 */
+	fun setWebSearchEnabled(enabled: Boolean) = launchStore { setWebSearchEnabled(enabled) }
+
+	fun setWebSearchResultCount(count: Int) = launchStore { setWebSearchResultCount(count) }
+
+	fun setWebSearchFetchPages(pages: Int) = launchStore { setWebSearchFetchPages(pages) }
+
+	fun setWebSearchPageChars(chars: Int) = launchStore { setWebSearchPageChars(chars) }
+
+	fun setWebSearchBudgetTokens(tokens: Int) = launchStore { setWebSearchBudgetTokens(tokens) }
+
 	fun resetTuning() = launchStore { resetTuning() }
 
 	// ---------------- 备份与恢复 ----------------

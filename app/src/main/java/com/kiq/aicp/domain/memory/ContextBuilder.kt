@@ -53,11 +53,22 @@ class ContextBuilder(
 		groupMates: List<PersonaEntity> = emptyList(),
 		/** 说话人此刻的心情，-2..2。0 表示平静，不会产生额外提示词 */
 		mood: Int = MoodTracker.NEUTRAL,
+		/**
+		 * 这轮联网搜到的内容（已由 WebSearchComposer 拼好）。空串表示没搜。
+		 * 群聊里几个角色共用同一份，所以是由调用方搜一次再传进来，而不是这里自己去搜。
+		 */
+		webResults: String = "",
 	): BuiltContext {
 		val nameById = (groupMates + speaker).associate { it.id to it.name }
 
 		val personaTokens = TokenEstimator.estimateMessage(speaker.systemPrompt)
-		val available = (settings.contextBudgetTokens - personaTokens).coerceAtLeast(MIN_AVAILABLE)
+		// 先裁到预算内，再按裁完的实际长度扣账。
+		// 反过来做（按预算扣、按裁完的注入）会白吃历史的额度：裁剪常常裁掉一大半，
+		// 扣了 1500 实际只注入 300，剩下那 1200 谁也用不上。
+		val web = clampWebResults(webResults, settings)
+		val webTokens = if (web.isBlank()) 0 else TokenEstimator.estimateMessage(web)
+		val available = (settings.contextBudgetTokens - personaTokens - webTokens)
+			.coerceAtLeast(MIN_AVAILABLE)
 		val recentQuota = (available * RECENT_RATIO).toInt()
 		val memoryQuota = available - recentQuota
 
@@ -174,6 +185,7 @@ class ContextBuilder(
 				emptyList()
 			},
 			moodDescription = if (settings.humanizeEnabled) MoodTracker.describe(mood) else "",
+			webResults = web,
 		)
 
 		val messages = buildList {
@@ -202,6 +214,59 @@ class ContextBuilder(
 			droppedMessageCount = extraPack.dropped,
 			imageCount = imageCount,
 		)
+	}
+
+	/**
+	 * 网上信息超预算时按"结果块"整块裁，不按行裁。
+	 *
+	 * 按行裁踩过一次坑：PassagePicker 有条"一行都装不下就截一刀"的分支，能吐出
+	 * 单行两千字的正文，按行装到它就停手，结果只剩个空的 `## 标题` 头，
+	 * 后面那几条明明装得下的摘要全被这一行挡在门外。给模型一个"我查到了"的空壳
+	 * 比什么都不给更糟——它会开始编内容。
+	 *
+	 * 所以改成：装不下的那块直接跳过继续试后面的（正文太长就退化成只给摘要），
+	 * 一块都装不进去时整段作废。
+	 */
+	private fun clampWebResults(webResults: String, settings: AicpSettings): String {
+		if (webResults.isBlank()) return ""
+		val budget = settings.webSearchBudgetTokens
+		if (TokenEstimator.estimateMessage(webResults) <= budget) return webResults
+
+		// 第一块是标题加那几句"这不是你的记忆"的约束，它必须跟着走，否则模型不知道这段是什么
+		val blocks = webResults.split(BLOCK_SEPARATOR)
+		// 没有结果块可切的时候（调用方自己拼的一段散文）退回按行裁，
+		// 总比因为切不出块就整段作废好
+		if (blocks.size == 1) return clampByLines(webResults, budget)
+
+		val header = blocks.first()
+		if (TokenEstimator.estimateMessage(header) > budget) return ""
+
+		val kept = StringBuilder(header)
+		var used = TokenEstimator.estimateMessage(header)
+		var taken = 0
+
+		for (block in blocks.drop(1)) {
+			val piece = BLOCK_SEPARATOR + block
+			val cost = TokenEstimator.estimateMessage(piece)
+			if (used + cost > budget) continue
+			kept.append(piece)
+			used += cost
+			taken++
+		}
+
+		return if (taken == 0) "" else kept.toString()
+	}
+
+	/** 按行砍尾巴，不砍到半句里 */
+	private fun clampByLines(text: String, budget: Int): String {
+		val kept = StringBuilder()
+		for (line in text.lineSequence()) {
+			val candidate = if (kept.isEmpty()) line else "$kept\n$line"
+			if (TokenEstimator.estimateMessage(candidate) > budget) break
+			kept.clear()
+			kept.append(candidate)
+		}
+		return kept.toString()
 	}
 
 	private suspend fun MessageEntity.toLlmMessage(
@@ -282,5 +347,8 @@ class ContextBuilder(
 
 		/** index 最多列几行。每行标题加一行摘要约 20 token */
 		const val INDEX_LIMIT = 30
+
+		/** 搜索结果里每条结果的起始标记，裁剪时按它切块（见 WebSearchComposer） */
+		const val BLOCK_SEPARATOR = "\n## "
 	}
 }

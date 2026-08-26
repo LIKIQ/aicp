@@ -58,6 +58,8 @@ internal object SystemPromptComposer {
 		groupMates: List<String>,
 		stickerEmotions: List<String> = emptyList(),
 		moodDescription: String = "",
+		/** 这轮联网搜到的内容，已经拼好格式（见 WebSearchComposer）。空串表示没搜 */
+		webResults: String = "",
 	): String = buildString {
 		append(personaPrompt.trim())
 
@@ -125,6 +127,16 @@ internal object SystemPromptComposer {
 				"消息前的【名字】标明说话人。你只以 $personaName 的身份说话，" +
 					"不要替别人发言，也不要在自己的回复前面加名字前缀。",
 			)
+		}
+
+		// 刚查到的网上信息排在记忆和场景之后、表情说明之前。
+		// 放这么后面是有意的：它是这轮才拿到的时效内容，离对话最近的位置模型最当真；
+		// 塞在人设和记忆中间反而会被当成背景资料一扫而过。
+		if (webResults.isNotBlank()) {
+			appendLine()
+			appendLine()
+			append(webResults.trim())
+			appendLine()
 		}
 
 		// 表情清单放在最后：它是"工具说明"性质的内容，

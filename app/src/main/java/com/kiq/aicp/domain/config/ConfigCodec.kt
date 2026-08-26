@@ -58,6 +58,11 @@ data class ConfigPayload(
 	val quietHoursEnd: Int = 8,
 	val keepAliveEnabled: Boolean = false,
 	val memorySchema: String = "",
+	val webSearchEnabled: Boolean = true,
+	val webSearchResultCount: Int = 5,
+	val webSearchFetchPages: Int = 1,
+	val webSearchPageChars: Int = 600,
+	val webSearchBudgetTokens: Int = 1500,
 	val dynamicColor: Boolean = true,
 )
 
@@ -190,6 +195,11 @@ object ConfigCodec {
 		quietHoursEnd = quietHoursEnd,
 		keepAliveEnabled = keepAliveEnabled,
 		memorySchema = memorySchema,
+		webSearchEnabled = webSearchEnabled,
+		webSearchResultCount = webSearchResultCount,
+		webSearchFetchPages = webSearchFetchPages,
+		webSearchPageChars = webSearchPageChars,
+		webSearchBudgetTokens = webSearchBudgetTokens,
 		dynamicColor = dynamicColor,
 	)
 
@@ -227,6 +237,11 @@ object ConfigCodec {
 		quietHoursEnd = quietHoursEnd.coerceIn(0, 23),
 		keepAliveEnabled = keepAliveEnabled,
 		memorySchema = memorySchema.take(600),
+		webSearchEnabled = webSearchEnabled,
+		webSearchResultCount = webSearchResultCount.coerceIn(1, 10),
+		webSearchFetchPages = webSearchFetchPages.coerceIn(0, 2),
+		webSearchPageChars = webSearchPageChars.coerceIn(200, 2_000),
+		webSearchBudgetTokens = webSearchBudgetTokens.coerceIn(300, 4_000),
 		dynamicColor = dynamicColor,
 	)
 }

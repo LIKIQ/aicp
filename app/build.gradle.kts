@@ -40,8 +40,10 @@ android {
 		//     主动搭话可保持后台运行
 		// 9 = 0.5.4，群聊多角色并发流式回复（错峰开口、后开口的能接上先说完的话）、
 		//     回复期间可以继续追问、API Key 可以选择不保存在本机
-		versionCode = 9
-		versionName = "0.5.4"
+		// 10 = 0.6.0，联网搜索：模型自己判断要不要查，走必应 RSS（免 key、国内直连），
+		//     摘要加按相关性挑出来的网页正文，只进上下文、界面上看不出来
+		versionCode = 10
+		versionName = "0.6.0"
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
 		// 精确到天而不是毫秒：带毫秒会让每次构建的 BuildConfig 都变，

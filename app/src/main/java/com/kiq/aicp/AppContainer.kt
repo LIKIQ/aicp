@@ -22,7 +22,9 @@ import com.kiq.aicp.data.prefs.SettingsStore
 import com.kiq.aicp.data.remote.LlmConfig
 import com.kiq.aicp.data.remote.LlmProvider
 import com.kiq.aicp.data.remote.OpenAiCompatProvider
+import com.kiq.aicp.data.remote.BingRssSearchClient
 import com.kiq.aicp.data.remote.UpdateChecker
+import com.kiq.aicp.data.remote.WebSearchClient
 import com.kiq.aicp.data.repo.ChatRepository
 import com.kiq.aicp.data.repo.ConversationRepository
 import com.kiq.aicp.data.repo.MemoryRepository
@@ -34,6 +36,7 @@ import com.kiq.aicp.domain.memory.MemoryCompressor
 import com.kiq.aicp.domain.memory.MemoryLinter
 import com.kiq.aicp.domain.persona.PersonaGenerator
 import com.kiq.aicp.domain.sticker.StickerVision
+import com.kiq.aicp.domain.websearch.WebSearchService
 import com.kiq.aicp.work.KeepAliveService
 import com.kiq.aicp.work.StickerVisionWorker
 import java.util.concurrent.TimeUnit
@@ -117,6 +120,16 @@ class AppContainer(context: Context) {
 	/** 表情识图。用后台任务逐张跑，跟带图聊天共用视觉模型 */
 	val stickerVision: StickerVision by lazy {
 		StickerVision(stickerRepository, attachmentStore, llmProvider)
+	}
+
+	/**
+	 * 联网搜索。搜索客户端刻意跟 llmProvider 分开装配：
+	 * 它要访问任意第三方站点，绝不能带上那套 Authorization 头。
+	 */
+	val webSearchClient: WebSearchClient by lazy { BingRssSearchClient(httpClient) }
+
+	val webSearchService: WebSearchService by lazy {
+		WebSearchService(llmProvider, webSearchClient)
 	}
 
 	/**

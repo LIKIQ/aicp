@@ -124,6 +124,28 @@ data class AicpSettings(
 	 */
 	val memorySchema: String = "",
 
+	/**
+	 * 联网搜索总开关。默认开，代价是每条消息都多一次"要不要查"的判定调用（走压缩模型）。
+	 * 认这个代价是因为判定用的是便宜的小模型、提示词也短，而漏查一次的观感是模型在胡编。
+	 */
+	val webSearchEnabled: Boolean = true,
+
+	/** 一次搜索取几条摘要（1..10）。搜得多不一定更准，条数上去主要是把预算吃光 */
+	val webSearchResultCount: Int = 5,
+
+	/**
+	 * 摘要之外再试抓几篇正文（0..2）。抓正文要额外几个 HTTP 往返，0 表示只吃摘要。
+	 * 是"试抓前几条"而不是"保证抓到几篇"：第一条抓失败或筛不出相关段落时不顺延，
+	 * 直接退回用它的摘要 —— 为多抓一篇再赔一个往返，用户等不起。
+	 */
+	val webSearchFetchPages: Int = 1,
+
+	/** 每篇正文最多留多少字（200..2000）。截断点靠前会丢结论，靠后会挤掉对话历史 */
+	val webSearchPageChars: Int = 600,
+
+	/** 搜索结果这一段最多占多少 token（300..4000），超了由 ContextBuilder 裁 */
+	val webSearchBudgetTokens: Int = 1500,
+
 	val dynamicColor: Boolean = true,
 ) {
 
